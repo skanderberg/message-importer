@@ -50,14 +50,14 @@ async function frontPost(path, token, body) {
 
 // Look up conversation ID via alt:uid, retrying a few times to allow indexing
 async function fetchConversationId(externalId, token) {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await sleep(attempt === 0 ? 3000 : 4000);
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await sleep(attempt === 0 ? 5000 : 8000);
     try {
       const r = await frontGet(`/messages/alt:uid:${encodeURIComponent(externalId)}`, token);
       const d = r.data;
-      const snippet = JSON.stringify(d).slice(0, 400);
-      console.log(`[uid-lookup] attempt=${attempt} status=${r.status} externalId=${externalId} data=${snippet}`);
-      if (!r.ok) { _job.debugLookup = { attempt, status: r.status, data: d }; continue; }
+      console.log(`[uid-lookup] attempt=${attempt} status=${r.status} externalId=${externalId} data=${JSON.stringify(d).slice(0, 400)}`);
+      _job.debugLookup = { attempt, status: r.status, externalId, data: d };
+      if (!r.ok) continue;
       const convId =
         d?.conversation_id ||
         d?.conversation?.id ||
@@ -65,10 +65,9 @@ async function fetchConversationId(externalId, token) {
         d?._results?.[0]?.conversation_id ||
         d?._results?.[0]?.conversation?.id;
       if (convId) return convId;
-      _job.debugLookup = { attempt, status: r.status, data: d };
     } catch (e) {
       console.log(`[uid-lookup] attempt=${attempt} error:`, e.message);
-      _job.debugLookup = { attempt, error: e.message };
+      _job.debugLookup = { attempt, externalId, error: e.message };
     }
   }
   return null;
@@ -76,7 +75,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'debug-lookup-v4', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'longer-retry-v5', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
