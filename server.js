@@ -4,6 +4,12 @@ const path    = require('path');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+// Log every incoming request so we can confirm Front is reaching us
+app.use((req, _res, next) => {
+  console.log(`[req] ${req.method} ${req.path} ct=${req.headers['content-type']}`);
+  next();
+});
+
 // Parse webhook with raw text first so Front's content-type never blocks it
 app.use('/webhook', express.text({ type: '*/*', limit: '10mb' }));
 app.use(express.json({ limit: '10mb' }));
@@ -89,7 +95,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'webhook-rawdebug-v11', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'request-logger-v12', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
