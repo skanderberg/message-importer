@@ -54,9 +54,10 @@ async function fetchConversationId(externalId, token) {
     await sleep(attempt === 0 ? 3000 : 4000);
     try {
       const r = await frontGet(`/messages/alt:uid:${encodeURIComponent(externalId)}`, token);
-      if (!r.ok) continue;
       const d = r.data;
-      // Try every known location Front puts the conversation ID
+      const snippet = JSON.stringify(d).slice(0, 400);
+      console.log(`[uid-lookup] attempt=${attempt} status=${r.status} externalId=${externalId} data=${snippet}`);
+      if (!r.ok) { _job.debugLookup = { attempt, status: r.status, data: d }; continue; }
       const convId =
         d?.conversation_id ||
         d?.conversation?.id ||
@@ -64,10 +65,10 @@ async function fetchConversationId(externalId, token) {
         d?._results?.[0]?.conversation_id ||
         d?._results?.[0]?.conversation?.id;
       if (convId) return convId;
-      // Store raw response for debugging
-      console.log(`[uid lookup attempt ${attempt}] raw:`, JSON.stringify(d).slice(0, 300));
+      _job.debugLookup = { attempt, status: r.status, data: d };
     } catch (e) {
-      console.log(`[uid lookup attempt ${attempt}] error:`, e.message);
+      console.log(`[uid-lookup] attempt=${attempt} error:`, e.message);
+      _job.debugLookup = { attempt, error: e.message };
     }
   }
   return null;
@@ -75,7 +76,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'conv_id-fix-v3', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'debug-lookup-v4', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
@@ -129,22 +130,14 @@ app.post('/api/queue-import', (req, res) => {
         try {
           const r = await frontPost(`/inboxes/${inbox_id}/imported_messages`, token, payload);
           if (r.ok) {
-            const convId = r.data?.conv_id || r.data?.conversation_id
-              || r.data?.conversation?.id
-              || r.data?._links?.related?.conversation?.split('/').pop();
-            const uid = r.data?.uid || r.data?.id;
-            _job.results[rowIndex] = { ok: true, msg: 'Imported', uid, conv_id: convId };
-            if (convId) {
-              _job.convLookup[rowIndex] = { externalId: payload.external_id, conversationId: convId };
-            } else {
-              // Fall back to alt:uid lookup
-              fetchConversationId(payload.external_id, token).then(cid => {
-                if (cid) {
-                  _job.convLookup[rowIndex] = { externalId: payload.external_id, conversationId: cid };
-                  _job.results[rowIndex].conv_id = cid;
-                }
-              });
-            }
+            _job.results[rowIndex] = { ok: true, msg: 'Imported' };
+            // Front returns 202 with no body — must look up conv ID via alt:uid
+            fetchConversationId(payload.external_id, token).then(cid => {
+              if (cid) {
+                _job.convLookup[rowIndex] = { externalId: payload.external_id, conversationId: cid };
+                _job.results[rowIndex].conv_id = cid;
+              }
+            });
           } else {
             _job.results[rowIndex] = { ok: false, msg: errMsg(r.data) || `HTTP ${r.status}` };
           }
@@ -180,7 +173,7 @@ app.get('/api/import-status', (_req, res) => {
     status: _job.status, total: _job.total, processed: _job.processed,
     phase: _job.phase, pause_remaining: _job.pauseRemaining,
     results: _job.results, webhookResults: _job.webhookResults,
-    convLookup: _job.convLookup,
+    convLookup: _job.convLookup, debugLookup: _job.debugLookup || null,
   });
 });
 
