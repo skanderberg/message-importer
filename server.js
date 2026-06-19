@@ -54,9 +54,21 @@ async function fetchConversationId(externalId, token) {
     await sleep(attempt === 0 ? 3000 : 4000);
     try {
       const r = await frontGet(`/messages/alt:uid:${encodeURIComponent(externalId)}`, token);
-      if (r.ok && r.data?.conversation_id) return r.data.conversation_id;
-      if (r.ok && r.data?._results?.[0]?.conversation_id) return r.data._results[0].conversation_id;
-    } catch (_) {}
+      if (!r.ok) continue;
+      const d = r.data;
+      // Try every known location Front puts the conversation ID
+      const convId =
+        d?.conversation_id ||
+        d?.conversation?.id ||
+        d?._links?.related?.conversation?.split('/').pop() ||
+        d?._results?.[0]?.conversation_id ||
+        d?._results?.[0]?.conversation?.id;
+      if (convId) return convId;
+      // Store raw response for debugging
+      console.log(`[uid lookup attempt ${attempt}] raw:`, JSON.stringify(d).slice(0, 300));
+    } catch (e) {
+      console.log(`[uid lookup attempt ${attempt}] error:`, e.message);
+    }
   }
   return null;
 }

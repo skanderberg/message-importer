@@ -228,7 +228,7 @@
 
     /* ── Conversation-style list ── */
     .msg-list { flex: 1; overflow-y: auto; overflow-x: auto; }
-    .msg-list-header, #tBody .msg-row { min-width: 1100px; }
+    .msg-list-header, #tBody .msg-row { min-width: 1220px; }
 
     .msg-list-header {
       display: flex; align-items: center; padding: 0 16px;
@@ -245,6 +245,7 @@
     .col-body   { flex: 1; min-width: 0; padding: 0 10px; }
     .col-from   { width: 140px; flex-shrink: 0; padding: 0 10px; }
     .col-to     { width: 140px; flex-shrink: 0; padding: 0 10px; }
+    .col-conv-id    { width: 120px; flex-shrink: 0; padding: 0 10px; }
     .col-inbox-exp  { width: 130px; flex-shrink: 0; padding: 0 10px; }
     .col-inbox-add  { width: 130px; flex-shrink: 0; padding: 0 10px; }
     .col-match      { width: 70px;  flex-shrink: 0; padding: 0 10px; }
@@ -268,6 +269,7 @@
     .row-body { flex: 1; min-width: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
     .row-from      { width: 140px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
     .row-to        { width: 140px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
+    .row-conv-id   { width: 120px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-3); font-size: 11px; font-family: 'SF Mono', Menlo, monospace; }
     .row-inbox-exp { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
     .row-inbox-add { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
     .row-match     { width: 70px;  flex-shrink: 0; padding: 0 10px; }
@@ -524,6 +526,7 @@
         <div class="col-body">Body</div>
         <div class="col-from" id="colFromHdr">From</div>
         <div class="col-to"   id="colToHdr">To</div>
+        <div class="col-conv-id">Conv ID</div>
         <div class="col-inbox-exp">Expected Inbox</div>
         <div class="col-inbox-add">Added Inbox</div>
         <div class="col-match">Match</div>
@@ -923,6 +926,7 @@ function renderList(statuses, fm, tm) {
       <div class="row-body" title="${esc(String(row.body||''))}">${esc(String(row.body||'').slice(0,100))}</div>
       <div class="row-from" title="${esc(st.from||'')}">${esc(st.from||'—')}</div>
       <div class="row-to"   title="${esc(st.to||'')}">${esc(st.to||'—')}</div>
+      <div class="row-conv-id"   id="conv-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-inbox-exp" id="exp-${i}" title="${expInbox}">${expInbox||'<span style="color:var(--text-3)">—</span>'}</div>
       <div class="row-inbox-add" id="add-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-match"     id="match-${i}"><span style="color:var(--text-3)">—</span></div>
@@ -991,7 +995,12 @@ async function startImport() {
 async function pollStatus() {
   try {
     const d = await fetch('/api/import-status').then(r=>r.json());
-    const { status, total, processed, phase, pause_remaining, results, webhookResults } = d;
+    const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup } = d;
+
+    for (const [idx, c] of Object.entries(convLookup||{})) {
+      const el = document.getElementById(`conv-${idx}`);
+      if (el) el.textContent = c.conversationId || '—';
+    }
 
     for (const [idx, r] of Object.entries(results||{})) {
       const i = parseInt(idx);
