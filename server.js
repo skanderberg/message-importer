@@ -75,7 +75,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'uid-from-import-v6', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'webhook-debug-v7', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
@@ -177,7 +177,7 @@ app.get('/api/import-status', (_req, res) => {
     phase: _job.phase, pause_remaining: _job.pauseRemaining,
     results: _job.results, webhookResults: _job.webhookResults,
     convLookup: _job.convLookup, debugLookup: _job.debugLookup || null,
-    debugImport: _job.debugImport || null,
+    debugImport: _job.debugImport || null, debugWebhook: _job.debugWebhook || null,
   });
 });
 
@@ -187,16 +187,13 @@ app.post('/webhook', (req, res) => {
 
   try {
     const body = req.body;
-
-    // Conversation ID is at body.conversation.id
     const convId = body?.conversation?.id;
-    if (!convId) return;
-
-    // Inbox name is in target.data[0].name for "move" events
     const inboxName = body?.target?.data?.[0]?.name || null;
-    if (!inboxName) return;
+    console.log(`[webhook] convId=${convId} inboxName=${inboxName} convLookupKeys=${JSON.stringify(Object.keys(_job.convLookup))}`);
+    _job.debugWebhook = { convId, inboxName, convLookup: _job.convLookup };
 
-    // Find which row owns this conversation ID
+    if (!convId || !inboxName) return;
+
     for (const [rowIdx, lookup] of Object.entries(_job.convLookup)) {
       if (lookup.conversationId === convId) {
         const expected = (_job.expectedInboxes[rowIdx] || '').trim().toLowerCase();
@@ -205,7 +202,7 @@ app.post('/webhook', (req, res) => {
         _job.webhookResults[rowIdx] = { addedInbox: added, match };
       }
     }
-  } catch (_) {}
+  } catch (e) { console.log('[webhook] error:', e.message); }
 });
 
 // Reset
