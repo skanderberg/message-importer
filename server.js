@@ -75,7 +75,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'longer-retry-v5', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'uid-from-import-v6', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
@@ -129,14 +129,18 @@ app.post('/api/queue-import', (req, res) => {
         try {
           const r = await frontPost(`/inboxes/${inbox_id}/imported_messages`, token, payload);
           if (r.ok) {
-            _job.results[rowIndex] = { ok: true, msg: 'Imported' };
-            // Front returns 202 with no body — must look up conv ID via alt:uid
-            fetchConversationId(payload.external_id, token).then(cid => {
-              if (cid) {
-                _job.convLookup[rowIndex] = { externalId: payload.external_id, conversationId: cid };
-                _job.results[rowIndex].conv_id = cid;
-              }
-            });
+            const uid = r.data?.uid || r.data?.id || r.data?.message_uid;
+            console.log(`[import] rowIndex=${rowIndex} status=${r.status} uid=${uid} raw=${JSON.stringify(r.data).slice(0,300)}`);
+            _job.results[rowIndex] = { ok: true, msg: 'Imported', uid };
+            _job.debugImport = { rowIndex, status: r.status, uid, data: r.data };
+            if (uid) {
+              fetchConversationId(uid, token).then(cid => {
+                if (cid) {
+                  _job.convLookup[rowIndex] = { uid, conversationId: cid };
+                  _job.results[rowIndex].conv_id = cid;
+                }
+              });
+            }
           } else {
             _job.results[rowIndex] = { ok: false, msg: errMsg(r.data) || `HTTP ${r.status}` };
           }
@@ -173,6 +177,7 @@ app.get('/api/import-status', (_req, res) => {
     phase: _job.phase, pause_remaining: _job.pauseRemaining,
     results: _job.results, webhookResults: _job.webhookResults,
     convLookup: _job.convLookup, debugLookup: _job.debugLookup || null,
+    debugImport: _job.debugImport || null,
   });
 });
 
