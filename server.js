@@ -4,6 +4,8 @@ const path    = require('path');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
+// Parse webhook with raw text first so Front's content-type never blocks it
+app.use('/webhook', express.text({ type: '*/*', limit: '10mb' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -87,7 +89,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'webhook-buffer-v9', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'webhook-rawbody-v10', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
@@ -200,7 +202,7 @@ app.post('/webhook', (req, res) => {
   res.status(200).send('ok'); // respond immediately
 
   try {
-    const body = req.body;
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const convId = body?.conversation?.id;
     const inboxName = body?.target?.data?.[0]?.name || null;
     console.log(`[webhook] convId=${convId} inboxName=${inboxName} convLookupKeys=${JSON.stringify(Object.keys(_job.convLookup))}`);
