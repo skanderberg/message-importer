@@ -1,7 +1,8 @@
 run = "npm start"
+modules = ["web", "nodejs-18"]
 
 [nix]
-channel = "stable-24_05"
+channel = "stable-25_05"
 
 [deployment]
 run = ["sh", "-c", "npm start"]
