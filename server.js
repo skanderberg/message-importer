@@ -75,7 +75,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'webhook-debug-v7', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'webhook-fix-v8', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
@@ -136,7 +136,7 @@ app.post('/api/queue-import', (req, res) => {
             if (uid) {
               fetchConversationId(uid, token).then(cid => {
                 if (cid) {
-                  _job.convLookup[rowIndex] = { uid, conversationId: cid };
+                  _job.convLookup[cid] = rowIndex;   // keyed by conv ID for instant webhook match
                   _job.results[rowIndex].conv_id = cid;
                 }
               });
@@ -194,13 +194,12 @@ app.post('/webhook', (req, res) => {
 
     if (!convId || !inboxName) return;
 
-    for (const [rowIdx, lookup] of Object.entries(_job.convLookup)) {
-      if (lookup.conversationId === convId) {
-        const expected = (_job.expectedInboxes[rowIdx] || '').trim().toLowerCase();
-        const added    = inboxName.trim();
-        const match    = expected ? added.toLowerCase() === expected : null;
-        _job.webhookResults[rowIdx] = { addedInbox: added, match };
-      }
+    const rowIdx = _job.convLookup[convId];
+    if (rowIdx !== undefined) {
+      const expected = (_job.expectedInboxes[rowIdx] || '').trim().toLowerCase();
+      const added    = inboxName.trim();
+      const match    = expected ? added.toLowerCase() === expected : null;
+      _job.webhookResults[rowIdx] = { addedInbox: added, match };
     }
   } catch (e) { console.log('[webhook] error:', e.message); }
 });
