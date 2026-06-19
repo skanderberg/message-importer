@@ -1051,7 +1051,7 @@ async function pollStatus() {
     if (lastOk !== undefined) document.getElementById(`tr-${lastOk}`)?.scrollIntoView({block:'nearest',behavior:'smooth'});
 
     if (status === 'done') {
-      clearInterval(_pollTimer); _pollTimer = null;
+      // Show done state immediately
       const ok   = Object.values(results||{}).filter(r=>r.ok).length;
       const fail = Object.values(results||{}).filter(r=>!r.ok).length;
       document.getElementById('stateRunning').classList.add('hidden');
@@ -1059,6 +1059,16 @@ async function pollStatus() {
       document.getElementById('sTotal').textContent = total;
       document.getElementById('sOk').textContent    = ok;
       document.getElementById('sFail').textContent  = fail;
+
+      // Keep polling until all successful rows have a conv ID (up to 2 min)
+      const successCount = ok;
+      const convCount    = Object.keys(convLookup||{}).length;
+      const wh           = Object.keys(webhookResults||{}).length;
+      if (convCount >= successCount && wh >= successCount) {
+        clearInterval(_pollTimer); _pollTimer = null;
+      } else if (!_importStart || (Date.now() - _importStart) > 120_000) {
+        clearInterval(_pollTimer); _pollTimer = null;
+      }
     }
   } catch {}
 }
