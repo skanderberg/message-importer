@@ -997,9 +997,10 @@ async function pollStatus() {
     const d = await fetch('/api/import-status').then(r=>r.json());
     const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup } = d;
 
-    for (const [idx, c] of Object.entries(convLookup||{})) {
+    for (const [idx, r] of Object.entries(results||{})) {
+      const convId = r.conv_id || (convLookup||{})[idx]?.conversationId;
       const el = document.getElementById(`conv-${idx}`);
-      if (el) el.textContent = c.conversationId || '—';
+      if (el && convId) el.textContent = convId;
     }
 
     for (const [idx, r] of Object.entries(results||{})) {

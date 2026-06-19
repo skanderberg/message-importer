@@ -126,22 +126,25 @@ app.post('/api/queue-import', (req, res) => {
       for (const { payload, rowIndex } of batch) {
         try {
           const r = await frontPost(`/inboxes/${inbox_id}/imported_messages`, token, payload);
-          console.log(`[import row ${rowIndex}] status=${r.status} body=`, JSON.stringify(r.data).slice(0, 200));
-          _job.results[rowIndex] = { ok: r.ok, msg: r.ok ? 'Imported' : (errMsg(r.data) || `HTTP ${r.status}`), importResponse: r.data };
           if (r.ok) {
-            const extId = payload.external_id;
-            // Check if import response directly contains message/conversation ID
-            const directConvId = r.data?.conversation_id || r.data?.conversation?.id
+            const convId = r.data?.conv_id || r.data?.conversation_id
+              || r.data?.conversation?.id
               || r.data?._links?.related?.conversation?.split('/').pop();
-            if (directConvId) {
-              _job.convLookup[rowIndex] = { externalId: extId, conversationId: directConvId };
+            const uid = r.data?.uid || r.data?.id;
+            _job.results[rowIndex] = { ok: true, msg: 'Imported', uid, conv_id: convId };
+            if (convId) {
+              _job.convLookup[rowIndex] = { externalId: payload.external_id, conversationId: convId };
             } else {
               // Fall back to alt:uid lookup
-              fetchConversationId(extId, token).then(convId => {
-                if (convId) _job.convLookup[rowIndex] = { externalId: extId, conversationId: convId };
-                else console.log(`[row ${rowIndex}] conv ID lookup failed for uid: ${extId}`);
+              fetchConversationId(payload.external_id, token).then(cid => {
+                if (cid) {
+                  _job.convLookup[rowIndex] = { externalId: payload.external_id, conversationId: cid };
+                  _job.results[rowIndex].conv_id = cid;
+                }
               });
             }
+          } else {
+            _job.results[rowIndex] = { ok: false, msg: errMsg(r.data) || `HTTP ${r.status}` };
           }
         } catch (err) {
           _job.results[rowIndex] = { ok: false, msg: err.message };
