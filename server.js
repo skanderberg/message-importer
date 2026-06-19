@@ -86,8 +86,11 @@ app.post('/api/list-inboxes', async (req, res) => {
       const next = r.data._pagination?.next;
       url = next ? new URL(next).pathname + new URL(next).search : null;
     }
-    const shared = inboxes.filter(i => i.type === 'shared');
-    res.json({ ok: true, inboxes: shared.map(i => ({ id: i.id, name: i.name })) });
+    // Return all non-private inboxes (shared/team inboxes)
+    const shared = inboxes.filter(i => i.type !== 'private');
+    // If nothing matched, return everything so we're never empty
+    const result = shared.length ? shared : inboxes;
+    res.json({ ok: true, inboxes: result.map(i => ({ id: i.id, name: i.name })) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
