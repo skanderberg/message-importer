@@ -89,7 +89,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'webhook-rawbody-v10', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'webhook-rawdebug-v11', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
@@ -201,20 +201,25 @@ app.get('/api/import-status', (_req, res) => {
 app.post('/webhook', (req, res) => {
   res.status(200).send('ok'); // respond immediately
 
+  const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+  _job.debugWebhook = { received: true, rawSnippet: rawBody.slice(0, 500) };
+
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const convId = body?.conversation?.id;
     const inboxName = body?.target?.data?.[0]?.name || null;
-    console.log(`[webhook] convId=${convId} inboxName=${inboxName} convLookupKeys=${JSON.stringify(Object.keys(_job.convLookup))}`);
-    _job.debugWebhook = { convId, inboxName, convLookup: _job.convLookup };
+    console.log(`[webhook] convId=${convId} inboxName=${inboxName}`);
+    _job.debugWebhook = { convId, inboxName, rawSnippet: rawBody.slice(0, 500) };
 
     if (!convId || !inboxName) return;
 
     if (!applyWebhook(convId, inboxName)) {
-      // Conv ID not in lookup yet — buffer and retry when lookup fills up
       _pendingWebhooks.push({ convId, inboxName });
     }
-  } catch (e) { console.log('[webhook] error:', e.message); }
+  } catch (e) {
+    console.log('[webhook] error:', e.message);
+    _job.debugWebhook = { error: e.message, rawSnippet: rawBody.slice(0, 500) };
+  }
 });
 
 // Reset
