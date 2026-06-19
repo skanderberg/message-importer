@@ -75,6 +75,8 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
+app.get('/api/version', (_req, res) => res.json({ version: 'conv_id-fix-v3', built: '2026-06-19' }));
+
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ ok: false, error: 'Missing token.' });
