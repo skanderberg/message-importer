@@ -571,6 +571,12 @@
             <button class="btn btn-purple btn-sm" onclick="resetAll()">New import</button>
           </div>
         </div>
+        <div id="matchSummary" class="hidden" style="margin-top:14px;padding:12px 16px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;font-size:13px;display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+          <span>Inbox match: <strong id="sMatchPct">—</strong></span>
+          <span style="color:var(--green)">✓ Matched: <strong id="sMatchOk">0</strong></span>
+          <span style="color:var(--red)">✗ Mismatched: <strong id="sMatchFail">0</strong></span>
+          <span style="color:var(--text-3)">Pending: <strong id="sMatchPending">0</strong></span>
+        </div>
       </div>
 
     </div>
@@ -1061,10 +1067,24 @@ async function pollStatus() {
       document.getElementById('sOk').textContent    = ok;
       document.getElementById('sFail').textContent  = fail;
 
+      // Update match summary
+      const whVals = Object.values(webhookResults||{});
+      const matched   = whVals.filter(w => w.match === true).length;
+      const mismatched = whVals.filter(w => w.match === false).length;
+      const pending   = ok - whVals.length;
+      const pct = whVals.length > 0 ? Math.round(matched / whVals.length * 100) : null;
+      if (whVals.length > 0 || ok > 0) {
+        document.getElementById('matchSummary').classList.remove('hidden');
+        document.getElementById('sMatchOk').textContent      = matched;
+        document.getElementById('sMatchFail').textContent    = mismatched;
+        document.getElementById('sMatchPending').textContent = pending;
+        document.getElementById('sMatchPct').textContent     = pct !== null ? `${pct}%` : '—';
+      }
+
       // Keep polling until all successful rows have a conv ID (up to 2 min)
       const successCount = ok;
       const convCount    = Object.keys(convLookup||{}).length;
-      const wh           = Object.keys(webhookResults||{}).length;
+      const wh           = whVals.length;
       if (convCount >= successCount && wh >= successCount) {
         clearInterval(_pollTimer); _pollTimer = null;
       } else if (!_importStart || (Date.now() - _importStart) > 120_000) {
