@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9b5de5"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffd700"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="64" height="64" rx="14" fill="#fffbea"/>
+
+  <!-- F-bracket shape (top bar + left bar) -->
+  <rect x="10" y="10" width="36" height="12" rx="6" fill="url(#bg)"/>
+  <rect x="10" y="10" width="12" height="36" rx="6" fill="url(#bg)"/>
+
+  <!-- Circle (purple like original) -->
+  <circle cx="38" cy="42" r="12" fill="#7c3aed" opacity="0.85"/>
+</svg>

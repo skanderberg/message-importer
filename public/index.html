@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Front Message Importer</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --front-purple:   #5c4ff6;
+      --front-purple-h: #4a3fd4;
+      --front-blue:     #1976d2;
+      --sidebar-bg:     #1e1f26;
+      --sidebar-hover:  #2a2b35;
+      --sidebar-active: #2e3040;
+      --panel-bg:       #f5f6f7;
+      --panel-border:   #e1e2e6;
+      --white:          #ffffff;
+      --text:           #1a1b23;
+      --text-2:         #555769;
+      --text-3:         #8b8da0;
+      --border:         #e8e9ed;
+      --border-2:       #d1d2da;
+      --row-hover:      #f0f1f5;
+      --row-active:     #ece9fe;
+      --success:        #1a7a4a;
+      --success-bg:     #e6f7ef;
+      --success-border: #a3dfc0;
+      --error:          #c0392b;
+      --error-bg:       #fdf0ee;
+      --error-border:   #f5b7b1;
+      --warn-bg:        #fef9ec;
+      --warn-border:    #f5dfa0;
+      --warn:           #8a6500;
+      --radius-sm:      4px;
+      --radius:         6px;
+      --radius-md:      8px;
+    }
+
+    html, body { height: 100%; overflow: hidden; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--panel-bg); color: var(--text); font-size: 13px; line-height: 1.4; display: flex; flex-direction: column; }
+
+    /* ── Top bar ── */
+    .topbar {
+      height: 44px; min-height: 44px;
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 16px 0 12px;
+      gap: 8px;
+      z-index: 200;
+    }
+    .topbar-logo {
+      width: 26px; height: 26px; background: var(--front-purple); border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 800; color: white; flex-shrink: 0;
+    }
+    .topbar-sep { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+    .topbar-title { font-size: 13px; font-weight: 600; color: var(--text); }
+    .topbar-subtitle { font-size: 12px; color: var(--text-3); }
+    .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      border: 1px solid var(--border-2); border-radius: 5px;
+      padding: 3px 10px; font-size: 11.5px; font-weight: 600; color: var(--text-2);
+      background: var(--white); cursor: default;
+    }
+    .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; }
+    .status-pill.connected .dot { background: #22c55e; }
+    .status-pill.error .dot { background: var(--error); }
+
+    /* ── Shell ── */
+    .shell { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Icon sidebar ── */
+    .icon-rail {
+      width: 48px; min-width: 48px;
+      background: var(--sidebar-bg);
+      display: flex; flex-direction: column; align-items: center;
+      padding: 10px 0; gap: 2px;
+      border-right: 1px solid rgba(255,255,255,.06);
+    }
+    .rail-icon {
+      width: 36px; height: 36px; border-radius: var(--radius);
+      display: flex; align-items: center; justify-content: center;
+      color: rgba(255,255,255,.4); font-size: 16px; cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    .rail-icon:hover { background: var(--sidebar-hover); color: rgba(255,255,255,.75); }
+    .rail-icon.active { background: var(--front-purple); color: white; }
+    .rail-sep { width: 22px; height: 1px; background: rgba(255,255,255,.08); margin: 6px 0; }
+
+    /* ── Left config panel ── */
+    .config-panel {
+      width: 268px; min-width: 268px;
+      background: var(--white);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow-y: auto;
+    }
+    .panel-section { border-bottom: 1px solid var(--border); }
+    .panel-section-header {
+      padding: 10px 14px 8px;
+      display: flex; align-items: center; gap: 7px;
+      cursor: pointer; user-select: none;
+    }
+    .panel-section-header:hover { background: var(--row-hover); }
+    .section-label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); flex: 1; }
+    .section-chevron { font-size: 9px; color: var(--text-3); transition: transform .2s; }
+    .section-chevron.open { transform: rotate(90deg); }
+    .panel-section-body { padding: 0 14px 14px; }
+    .panel-section-body.collapsed { display: none; }
+
+    /* Form fields */
+    .field { margin-top: 10px; }
+    .field-label { font-size: 11px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; letter-spacing: .01em; }
+    .field-input {
+      width: 100%; padding: 6px 9px;
+      border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+      font-size: 12.5px; color: var(--text); background: var(--white);
+      outline: none; font-family: inherit; transition: border-color .15s, box-shadow .15s;
+    }
+    .field-input:focus { border-color: var(--front-purple); box-shadow: 0 0 0 2px rgba(92,79,246,.15); }
+    .field-row { display: flex; gap: 5px; }
+    .field-row .field-input { flex: 1; }
+
+    /* Btn */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 13px; border: none; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap; transition: all .15s; }
+    .btn-sm { padding: 4px 9px; font-size: 11.5px; }
+    .btn-xs { padding: 2px 7px; font-size: 11px; border-radius: 4px; }
+    .btn-purple { background: var(--front-purple); color: white; }
+    .btn-purple:hover:not(:disabled) { background: var(--front-purple-h); }
+    .btn-outline { background: white; color: var(--text); border: 1px solid var(--border-2); }
+    .btn-outline:hover:not(:disabled) { background: var(--row-hover); border-color: var(--border-2); }
+    .btn-ghost { background: transparent; color: var(--text-2); }
+    .btn-ghost:hover:not(:disabled) { background: var(--row-hover); }
+    .btn-full { width: 100%; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    /* Radio rows — Front style */
+    .radio-row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 8px; border-radius: var(--radius-sm);
+      cursor: pointer; font-size: 12.5px; color: var(--text);
+      margin-top: 4px; transition: background .12s;
+    }
+    .radio-row:hover { background: var(--row-hover); }
+    .radio-row.selected { background: var(--row-active); color: var(--front-purple); font-weight: 600; }
+    .radio-row input { accent-color: var(--front-purple); width: 13px; height: 13px; margin: 0; }
+
+    /* Inbox search */
+    .inbox-search-wrap { position: relative; }
+    .inbox-search-input {
+      width: 100%; padding: 6px 28px 6px 9px;
+      border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+      font-size: 12.5px; color: var(--text); background: var(--white);
+      outline: none; font-family: inherit;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .inbox-search-input:focus { border-color: var(--front-purple); box-shadow: 0 0 0 2px rgba(92,79,246,.15); }
+    .inbox-search-icon { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--text-3); pointer-events: none; }
+    .inbox-search-clear {
+      position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+      font-size: 14px; color: var(--text-3); cursor: pointer; line-height: 1;
+      padding: 1px 2px; border-radius: 3px;
+    }
+    .inbox-search-clear:hover { color: var(--text); background: var(--row-hover); }
+
+    .inbox-list {
+      margin-top: 4px; border: 1px solid var(--border-2); border-radius: var(--radius-sm);
+      max-height: 180px; overflow-y: auto; background: var(--white);
+    }
+    .inbox-item {
+      padding: 7px 10px; cursor: pointer; font-size: 12.5px;
+      border-bottom: 1px solid var(--border); transition: background .1s;
+      display: flex; flex-direction: column; gap: 1px;
+    }
+    .inbox-item:last-child { border-bottom: none; }
+    .inbox-item:hover { background: var(--row-hover); }
+    .inbox-item.selected { background: var(--row-active); }
+    .inbox-item-name { font-weight: 500; color: var(--text); }
+    .inbox-item-id   { font-size: 10.5px; color: var(--text-3); font-family: 'SF Mono', Menlo, monospace; }
+    .inbox-item-name mark { background: #ede9fe; color: var(--front-purple); border-radius: 2px; padding: 0 1px; font-style: normal; }
+    .inbox-no-results { padding: 10px; font-size: 12px; color: var(--text-3); text-align: center; }
+
+    /* Loading dots */
+    .loading-row { display: flex; align-items: center; gap: 7px; padding: 6px 0; font-size: 12px; color: var(--text-3); }
+
+    /* Alerts */
+    .alert { padding: 8px 10px; border-radius: var(--radius-sm); font-size: 12px; line-height: 1.55; margin-top: 8px; border: 1px solid; }
+    .a-ok   { background: var(--success-bg); color: var(--success); border-color: var(--success-border); }
+    .a-err  { background: var(--error-bg);   color: var(--error);   border-color: var(--error-border); }
+    .a-warn { background: var(--warn-bg);    color: var(--warn);    border-color: var(--warn-border); }
+    .a-info { background: #eef3ff; color: #2d4acb; border-color: #b8c8f5; }
+
+    /* ── Main panel ── */
+    .main-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--panel-bg); }
+
+    /* Sub-toolbar */
+    .subtoolbar {
+      height: 40px; background: var(--white); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; padding: 0 16px; gap: 10px; flex-shrink: 0;
+    }
+    .subtoolbar-title { font-size: 12.5px; font-weight: 600; color: var(--text); }
+    .subtoolbar-meta  { font-size: 12px; color: var(--text-3); }
+    .subtoolbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+
+    /* Drop zone area */
+    .source-area { padding: 12px 16px; background: var(--white); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .dropzone {
+      border: 1.5px dashed var(--border-2); border-radius: var(--radius-md);
+      padding: 22px 16px; text-align: center; cursor: pointer; position: relative;
+      transition: border-color .2s, background .2s; background: var(--panel-bg);
+    }
+    .dropzone:hover, .dropzone.over { border-color: var(--front-purple); background: #f4f2ff; }
+    .dropzone.loaded { border-style: solid; border-color: var(--front-purple); background: #f4f2ff; }
+    .dropzone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .dz-icon { font-size: 20px; margin-bottom: 5px; }
+    .dz-label { font-size: 12.5px; font-weight: 600; color: var(--text); }
+    .dz-sub { font-size: 11.5px; color: var(--text-3); margin-top: 2px; }
+
+    .divider-or { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: var(--text-3); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    .divider-or::before, .divider-or::after { content:''; flex:1; height:1px; background: var(--border); }
+
+    /* ── Conversation-style list ── */
+    .msg-list { flex: 1; overflow-y: auto; overflow-x: auto; }
+    .msg-list-header, #tBody .msg-row { min-width: 1100px; }
+
+    .msg-list-header {
+      display: flex; align-items: center; padding: 0 16px;
+      height: 34px; background: var(--white);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 10;
+      font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .05em; color: var(--text-3);
+      gap: 0;
+    }
+    .col-num    { width: 36px; flex-shrink: 0; }
+    .col-status { width: 110px; flex-shrink: 0; }
+    .col-subj   { flex: 1; min-width: 0; padding: 0 10px; }
+    .col-body   { flex: 1; min-width: 0; padding: 0 10px; }
+    .col-from   { width: 140px; flex-shrink: 0; padding: 0 10px; }
+    .col-to     { width: 140px; flex-shrink: 0; padding: 0 10px; }
+    .col-inbox-exp  { width: 130px; flex-shrink: 0; padding: 0 10px; }
+    .col-inbox-add  { width: 130px; flex-shrink: 0; padding: 0 10px; }
+    .col-match      { width: 70px;  flex-shrink: 0; padding: 0 10px; }
+
+    .msg-row {
+      display: flex; align-items: center;
+      padding: 0 16px; min-height: 38px;
+      border-bottom: 1px solid var(--border);
+      background: var(--white);
+      transition: background .1s;
+      font-size: 12.5px;
+    }
+    .msg-row:hover { background: var(--row-hover); }
+    .msg-row.row-fail { background: #fff8f8; }
+    .msg-row.row-fail:hover { background: #ffefef; }
+    .msg-row.row-imported { background: #f7fdf9; }
+
+    .row-num  { width: 36px; flex-shrink: 0; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+    .row-stat { width: 110px; flex-shrink: 0; }
+    .row-subj { flex: 1; min-width: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
+    .row-body { flex: 1; min-width: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+    .row-from      { width: 140px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
+    .row-to        { width: 140px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
+    .row-inbox-exp { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
+    .row-inbox-add { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
+    .row-match     { width: 70px;  flex-shrink: 0; padding: 0 10px; }
+
+    /* Status badges — Front style */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .b-queued    { background: #f0f1f5; color: var(--text-3); }
+    .b-importing { background: #eef3ff; color: #2d4acb; }
+    .b-ok        { background: var(--success-bg); color: var(--success); }
+    .b-fail      { background: var(--error-bg); color: var(--error); }
+    .b-skip      { background: var(--warn-bg); color: var(--warn); }
+
+    /* ── Footer / import bar ── */
+    .import-bar {
+      border-top: 1px solid var(--border);
+      background: var(--white);
+      padding: 12px 16px;
+      flex-shrink: 0;
+    }
+    .import-bar-idle { display: flex; align-items: center; gap: 10px; }
+    .import-bar-idle .ready-label { font-size: 12.5px; color: var(--text-2); }
+
+    .prog-wrap { height: 4px; background: #e8e9ed; border-radius: 99px; overflow: hidden; margin: 8px 0; }
+    .prog-bar  { height: 100%; background: var(--front-purple); border-radius: 99px; transition: width .3s ease; }
+
+    .prog-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+    .prog-label { font-weight: 600; color: var(--text); }
+    .prog-frac  { color: var(--text-3); font-variant-numeric: tabular-nums; margin-left: auto; }
+    .time-tag {
+      display: inline-flex; align-items: center; gap: 4px;
+      border: 1px solid var(--border-2); border-radius: 4px;
+      padding: 2px 8px; font-size: 11.5px; font-weight: 600; color: var(--text-2);
+      background: var(--panel-bg);
+    }
+    .time-tag.pausing { border-color: #f5dfa0; background: var(--warn-bg); color: var(--warn); }
+
+    .done-stats { display: flex; gap: 16px; align-items: center; }
+    .stat-item { text-align: center; }
+    .stat-num  { font-size: 20px; font-weight: 700; line-height: 1; }
+    .stat-lbl  { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: .05em; margin-top: 1px; }
+    .s-total .stat-num { color: var(--text); }
+    .s-ok    .stat-num { color: var(--success); }
+    .s-fail  .stat-num { color: var(--error); }
+
+    /* Misc */
+    .hidden { display: none !important; }
+    .ml-auto { margin-left: auto; }
+    .mt-6 { margin-top: 6px; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: 11px; height: 11px; border: 2px solid rgba(92,79,246,.2); border-top-color: var(--front-purple); border-radius: 50%; animation: spin .6s linear infinite; flex-shrink: 0; }
+    .spinner-white { border-color: rgba(255,255,255,.3); border-top-color: white; }
+
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .pulse { animation: pulse 1.5s ease-in-out infinite; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #b0b2be; }
+
+    /* Empty state */
+    .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-3); gap: 8px; padding: 40px; }
+    .empty-icon { font-size: 32px; opacity: .5; }
+    .empty-label { font-size: 13px; font-weight: 600; color: var(--text-2); }
+    .empty-sub { font-size: 12px; text-align: center; max-width: 280px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Top bar ── -->
+<div class="topbar">
+  <div class="topbar-logo">F</div>
+  <div class="topbar-sep"></div>
+  <span class="topbar-title">Message Importer</span>
+  <span class="topbar-subtitle" style="margin-left:4px">/ Import tool</span>
+  <div class="topbar-right">
+    <span id="credPill" class="status-pill"><span class="dot"></span>Not connected</span>
+    <button class="btn btn-outline btn-sm" onclick="resetAll()">↺ New import</button>
+  </div>
+</div>
+
+<div class="shell">
+
+  <!-- ── Icon rail ── -->
+  <div class="icon-rail">
+    <div class="rail-icon active" title="Import">📥</div>
+    <div class="rail-sep"></div>
+    <div class="rail-icon" title="Settings" style="margin-top:auto">⚙️</div>
+  </div>
+
+  <!-- ── Config panel ── -->
+  <div class="config-panel">
+
+    <!-- Auth -->
+    <div class="panel-section">
+      <div class="panel-section-header" onclick="toggleSection('authBody','authChev')">
+        <span style="font-size:13px">🔑</span>
+        <span class="section-label">Authentication</span>
+        <span class="section-chevron open" id="authChev">▶</span>
+      </div>
+      <div class="panel-section-body" id="authBody">
+
+        <!-- Token input -->
+        <div id="tokenFields">
+          <div class="field">
+            <div class="field-label">Bearer Token</div>
+            <div class="field-row">
+              <input type="password" class="field-input" id="apiToken" placeholder="eyJ…" autocomplete="off" />
+              <button class="btn btn-outline btn-sm" id="tokenToggle" onclick="toggleToken()">Show</button>
+            </div>
+          </div>
+          <div id="authError" class="hidden" style="margin-bottom:8px"></div>
+          <button class="btn btn-purple btn-full" id="validateBtn" onclick="validateCreds()">
+            Validate &amp; connect
+          </button>
+        </div>
+
+        <!-- Connected state -->
+        <div id="connectedBadge" class="hidden">
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--success-bg);border:1px solid var(--success-border);border-radius:var(--radius-sm)">
+            <span style="font-size:15px">✓</span>
+            <div style="flex:1;min-width:0">
+              <div id="connectedName"  style="font-size:12.5px;font-weight:600;color:var(--success)"></div>
+              <div id="connectedEmail" style="font-size:11px;color:var(--success);opacity:.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
+            </div>
+            <button class="btn btn-xs btn-outline" onclick="disconnect()" style="flex-shrink:0;color:var(--text-2)">Disconnect</button>
+          </div>
+        </div>
+
+        <!-- Inbox picker — revealed after validation -->
+        <div id="inboxWrap" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+          <div class="field-label" style="margin-bottom:6px">Inbox</div>
+          <div id="inboxLoading" class="loading-row">
+            <span class="spinner"></span> Loading shared inboxes…
+          </div>
+          <div id="inboxSearchWrap" class="hidden">
+            <div class="inbox-search-wrap">
+              <input type="text" id="inboxSearch" class="inbox-search-input" placeholder="Search inboxes…"
+                oninput="filterInboxes()" autocomplete="off" />
+              <span class="inbox-search-icon" id="inboxSearchIcon">🔍</span>
+              <span class="inbox-search-clear hidden" id="inboxSearchClear" onclick="clearInboxSearch()">✕</span>
+            </div>
+            <div class="inbox-list" id="inboxList"></div>
+          </div>
+          <div id="inboxError" class="alert a-err hidden"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Field settings -->
+    <div class="panel-section">
+      <div class="panel-section-header" onclick="toggleSection('fieldBody','fieldChev')">
+        <span style="font-size:13px">⚙️</span>
+        <span class="section-label">Field settings</span>
+        <span class="section-chevron open" id="fieldChev">▶</span>
+      </div>
+      <div class="panel-section-body" id="fieldBody">
+        <div class="field">
+          <div class="field-label">FROM sender</div>
+          <label class="radio-row selected" id="rFromFile">
+            <input type="radio" name="fromMode" value="file" checked onchange="onModeChange()">
+            Use column from file
+          </label>
+          <label class="radio-row" id="rFromRand">
+            <input type="radio" name="fromMode" value="random" onchange="onModeChange()">
+            🎲 Generate random
+          </label>
+        </div>
+        <div class="field">
+          <div class="field-label">TO recipient</div>
+          <label class="radio-row selected" id="rToFile">
+            <input type="radio" name="toMode" value="file" checked onchange="onModeChange()">
+            Use column from file
+          </label>
+          <label class="radio-row" id="rToRand">
+            <input type="radio" name="toMode" value="random" onchange="onModeChange()">
+            🎲 Generate random
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- File format reference -->
+    <div class="panel-section">
+      <div class="panel-section-header" onclick="toggleSection('fmtBody','fmtChev')">
+        <span style="font-size:13px">📋</span>
+        <span class="section-label">File format</span>
+        <span class="section-chevron open" id="fmtChev">▶</span>
+      </div>
+      <div class="panel-section-body" id="fmtBody">
+        <div style="font-size:12px;color:var(--text-2);line-height:1.6">
+          Upload <strong>CSV</strong>, <strong>Excel (.xlsx)</strong>, or a <strong>Google Sheets</strong> URL.
+        </div>
+        <div style="margin-top:8px;background:var(--panel-bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 10px">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin-bottom:3px">Required columns</div>
+          <code style="font-size:11.5px;color:var(--front-purple)">subject &nbsp; body</code>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin:7px 0 3px">Optional columns</div>
+          <code style="font-size:11.5px;color:var(--text-3)">from &nbsp; to &nbsp; inbox</code>
+        </div>
+        <div style="margin-top:8px;font-size:11.5px;color:var(--text-3);line-height:1.55">
+          Rate limit: <strong style="color:var(--text-2)">50 msgs / min</strong>. Larger imports pause automatically between batches.
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /config-panel -->
+
+  <!-- ── Main panel ── -->
+  <div class="main-panel">
+
+    <!-- Data source bar -->
+    <div class="source-area">
+      <div class="dropzone" id="dropzone"
+        ondragover="onDragOver(event)" ondragleave="onDragLeave()" ondrop="onDrop(event)">
+        <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" onchange="onFileSelect(event)" />
+        <div class="dz-icon">📂</div>
+        <div class="dz-label" id="dzLabel">Drop a file here, or click to browse</div>
+        <div class="dz-sub"  id="dzSub">CSV · Excel (.xlsx / .xls)</div>
+      </div>
+      <div class="divider-or">or Google Sheets</div>
+      <div class="field-row">
+        <input type="url" class="field-input" id="gsUrl" placeholder="https://docs.google.com/spreadsheets/d/…" />
+        <button class="btn btn-outline btn-sm" onclick="loadGsheet()">Load</button>
+      </div>
+      <div id="validArea"></div>
+    </div>
+
+    <!-- Sub-toolbar (message list header controls) -->
+    <div class="subtoolbar" id="listToolbar">
+      <span class="subtoolbar-title">Messages</span>
+      <span class="subtoolbar-meta" id="previewMeta"></span>
+      <div class="subtoolbar-right">
+        <button class="btn btn-ghost btn-sm" id="clearBtn" onclick="clearFile()" style="display:none">Clear</button>
+      </div>
+    </div>
+
+    <!-- Column headers + rows -->
+    <div class="msg-list" id="msgList">
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">📭</div>
+        <div class="empty-label">No messages yet</div>
+        <div class="empty-sub">Upload a CSV, Excel file, or Google Sheets URL to preview and import messages into Front.</div>
+      </div>
+
+      <!-- List header (hidden until file loaded) -->
+      <div class="msg-list-header hidden" id="listHeader">
+        <div class="col-num">#</div>
+        <div class="col-status">Status</div>
+        <div class="col-subj">Subject</div>
+        <div class="col-body">Body</div>
+        <div class="col-from" id="colFromHdr">From</div>
+        <div class="col-to"   id="colToHdr">To</div>
+        <div class="col-inbox-exp">Expected Inbox</div>
+        <div class="col-inbox-add">Added Inbox</div>
+        <div class="col-match">Match</div>
+      </div>
+      <div id="tBody"></div>
+    </div>
+
+    <!-- Import footer bar -->
+    <div class="import-bar hidden" id="importBar">
+
+      <!-- Idle -->
+      <div class="import-bar-idle" id="stateIdle">
+        <span class="ready-label" id="readyLabel"></span>
+        <button class="btn btn-purple ml-auto" id="importBtn" onclick="startImport()">
+          Import into Front →
+        </button>
+      </div>
+
+      <!-- Running -->
+      <div id="stateRunning" class="hidden">
+        <div class="prog-row">
+          <span class="prog-label" id="progLabel">Importing…</span>
+          <span class="time-tag" id="timeTag">⏱ Calculating…</span>
+          <span class="prog-frac" id="progFrac"></span>
+        </div>
+        <div class="prog-wrap"><div class="prog-bar" id="progBar" style="width:0%"></div></div>
+        <div style="font-size:11.5px;color:var(--text-3)" id="progSub"></div>
+      </div>
+
+      <!-- Done -->
+      <div id="stateDone" class="hidden">
+        <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+          <div class="done-stats">
+            <div class="stat-item s-total"><div class="stat-num" id="sTotal">0</div><div class="stat-lbl">Total</div></div>
+            <div style="width:1px;height:28px;background:var(--border)"></div>
+            <div class="stat-item s-ok">  <div class="stat-num" id="sOk">0</div>  <div class="stat-lbl">Imported</div></div>
+            <div style="width:1px;height:28px;background:var(--border)"></div>
+            <div class="stat-item s-fail"><div class="stat-num" id="sFail">0</div><div class="stat-lbl">Failed</div></div>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:8px">
+            <button class="btn btn-outline btn-sm" onclick="downloadCSV()">⬇ Export CSV</button>
+            <button class="btn btn-purple btn-sm" onclick="resetAll()">New import</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div><!-- /main-panel -->
+</div><!-- /shell -->
+
+<script>
+// ═══════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════
+const FIRSTS  = ['Alex','Blake','Casey','Dana','Ellis','Finn','Gray','Harper','Indira','Jordan','Kelly','Lane','Morgan','Noel','Parker','Quinn','Riley','Sam','Taylor','Uma','Valerie','Wren','Xen','Yael','Zara'];
+const LASTS   = ['Smith','Johnson','Lee','Kim','Garcia','Brown','Wilson','Moore','Taylor','Davis','Martinez','Anderson','Thomas','Jackson','White','Harris'];
+const DOMAINS = ['testmail.io','sampledomain.dev','inbox-test.com','demo.io','example.org'];
+
+const pick      = a => a[Math.floor(Math.random() * a.length)];
+const randEmail = () => `${pick(FIRSTS).toLowerCase()}.${pick(LASTS).toLowerCase()}@${pick(DOMAINS)}`;
+const randName  = () => `${pick(FIRSTS)} ${pick(LASTS)}`;
+const slugify   = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);
+const esc       = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const post      = (url, body) => fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r=>r.json().catch(()=>({})));
+
+// ═══════════════════════════════════════
+// State
+// ═══════════════════════════════════════
+let rows = [], readyPayloads = [], _rowResults = {}, _pollTimer = null, _importStart = null;
+let _expectedInboxes = {}; // rowIndex → inbox name from file
+
+// ═══════════════════════════════════════
+// Collapsible sections
+// ═══════════════════════════════════════
+function toggleSection(bodyId, chevId) {
+  const body = document.getElementById(bodyId);
+  const chev = document.getElementById(chevId);
+  const open = !body.classList.toggle('collapsed');
+  chev.classList.toggle('open', open);
+}
+
+// ═══════════════════════════════════════
+// Auth — bearer token
+// ═══════════════════════════════════════
+let _token = '';
+
+function toggleToken() {
+  const el  = document.getElementById('apiToken');
+  const btn = document.getElementById('tokenToggle');
+  const show = el.type === 'password';
+  el.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
+
+async function validateCreds() {
+  const token = document.getElementById('apiToken').value.trim();
+  if (!token) { showAuthError('Enter your bearer token.'); return; }
+
+  const btn = document.getElementById('validateBtn');
+  btn.innerHTML = '<span class="spinner spinner-white"></span>&nbsp;Connecting…';
+  btn.disabled  = true;
+  document.getElementById('authError').classList.add('hidden');
+
+  try {
+    const d = await post('/api/validate', { token });
+    if (d.ok) {
+      _token = token;
+      setConnected(d.data);
+      loadInboxes();
+    } else {
+      showAuthError(errText(d) || 'Invalid token.');
+    }
+  } catch { showAuthError('Server not reachable.'); }
+  finally { btn.innerHTML = 'Validate &amp; connect'; btn.disabled = false; }
+}
+
+function setConnected(data) {
+  document.getElementById('tokenFields').classList.add('hidden');
+  document.getElementById('connectedBadge').classList.remove('hidden');
+  document.getElementById('connectedName').textContent  = data?.name  || 'Connected';
+  document.getElementById('connectedEmail').textContent = data?.email || '';
+  setCredPill('connected', data?.name || data?.email || 'Connected');
+}
+
+function disconnect() {
+  _token = ''; _selectedInbox = null; _allInboxes = [];
+  document.getElementById('connectedBadge').classList.add('hidden');
+  document.getElementById('tokenFields').classList.remove('hidden');
+  document.getElementById('inboxWrap').classList.add('hidden');
+  document.getElementById('authError').classList.add('hidden');
+  setCredPill('', 'Not connected');
+  clearFile();
+}
+
+function showAuthError(msg) {
+  const el = document.getElementById('authError');
+  el.className = 'alert a-err';
+  el.textContent = msg;
+}
+
+function errText(d) {
+  return typeof d.error === 'object' ? (d.error?.message || JSON.stringify(d.error)) : d.error;
+}
+
+function setCredPill(state, msg) {
+  const el = document.getElementById('credPill');
+  el.className = `status-pill ${state}`;
+  el.innerHTML = `<span class="dot"></span>${esc(msg)}`;
+}
+
+let _allInboxes    = [];   // [{id, name}] full list from API
+let _selectedInbox = null; // {id, name} or null
+
+async function loadInboxes() {
+  document.getElementById('inboxWrap').classList.remove('hidden');
+  document.getElementById('inboxLoading').style.display = 'flex';
+  document.getElementById('inboxSearchWrap').classList.add('hidden');
+  document.getElementById('inboxError').classList.add('hidden');
+  _allInboxes = []; _selectedInbox = null;
+
+  try {
+    const d = await post('/api/list-inboxes', { token: _token });
+    if (!d.ok) throw new Error(d.error || 'Failed to load inboxes');
+
+    _allInboxes = d.inboxes || [];
+    document.getElementById('inboxLoading').style.display = 'none';
+    document.getElementById('inboxSearchWrap').classList.remove('hidden');
+    document.getElementById('inboxSearch').value = '';
+    renderInboxList('');
+  } catch (e) {
+    document.getElementById('inboxLoading').style.display = 'none';
+    const el = document.getElementById('inboxError');
+    el.textContent = `Could not load inboxes: ${e.message}`;
+    el.classList.remove('hidden');
+  }
+}
+
+function filterInboxes() {
+  const q = document.getElementById('inboxSearch').value;
+  document.getElementById('inboxSearchClear').classList.toggle('hidden', !q);
+  document.getElementById('inboxSearchIcon').classList.toggle('hidden', !!q);
+  _selectedInbox = null; // clear selection when user types a new search
+  document.getElementById('inboxList').classList.remove('hidden');
+  renderInboxList(q);
+}
+
+function clearInboxSearch() {
+  _selectedInbox = null;
+  document.getElementById('inboxSearch').value = '';
+  document.getElementById('inboxSearchClear').classList.add('hidden');
+  document.getElementById('inboxSearchIcon').classList.remove('hidden');
+  renderInboxList('');
+  document.getElementById('inboxSearch').focus();
+}
+
+function renderInboxList(query) {
+  const q       = query.trim().toLowerCase();
+  const matches = q
+    ? _allInboxes.filter(i => i.name.toLowerCase().includes(q) || i.id.toLowerCase().includes(q))
+    : _allInboxes;
+
+  const list = document.getElementById('inboxList');
+  if (!matches.length) {
+    list.innerHTML = `<div class="inbox-no-results">${q ? 'No inboxes match "' + esc(query) + '"' : 'No shared inboxes found'}</div>`;
+    return;
+  }
+
+  list.innerHTML = matches.map(inbox => {
+    const isSelected = _selectedInbox?.id === inbox.id;
+    const nameHtml   = q ? highlightMatch(inbox.name, q) : esc(inbox.name);
+    return `<div class="inbox-item${isSelected?' selected':''}" data-id='${inbox.id}' data-name='${inbox.name}'>
+      <span class="inbox-item-name">${nameHtml}</span>
+      <span class="inbox-item-id">${esc(inbox.id)}</span>
+    </div>`;
+  }).join('');
+}
+
+function highlightMatch(text, q) {
+  const idx = text.toLowerCase().indexOf(q);
+  if (idx === -1) return esc(text);
+  return esc(text.slice(0, idx)) + `<mark>${esc(text.slice(idx, idx + q.length))}</mark>` + esc(text.slice(idx + q.length));
+}
+
+function selectInbox(id, name) {
+  _selectedInbox = { id, name };
+  document.getElementById('inboxSearch').value = name;
+  document.getElementById('inboxSearchClear').classList.remove('hidden');
+  document.getElementById('inboxSearchIcon').classList.add('hidden');
+  document.getElementById('inboxList').classList.add('hidden');
+}
+
+// ═══════════════════════════════════════
+// Mode toggles
+// ═══════════════════════════════════════
+function onModeChange() {
+  ['rFromFile','rFromRand','rToFile','rToRand'].forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.toggle('selected', el.querySelector('input').checked);
+  });
+  if (rows.length) processRows();
+}
+const fromMode = () => document.querySelector('input[name=fromMode]:checked').value;
+const toMode   = () => document.querySelector('input[name=toMode]:checked').value;
+
+// ═══════════════════════════════════════
+// File handling
+// ═══════════════════════════════════════
+function onDragOver(e)   { e.preventDefault(); document.getElementById('dropzone').classList.add('over'); }
+function onDragLeave()   { document.getElementById('dropzone').classList.remove('over'); }
+function onDrop(e)       { e.preventDefault(); onDragLeave(); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }
+function onFileSelect(e) { const f = e.target.files[0]; if (f) handleFile(f); }
+
+function handleFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['csv','xlsx','xls'].includes(ext)) { showAlerts([{t:'err',m:`Unsupported type ".${ext}". Use CSV or Excel.`}]); return; }
+  setDzLoaded(file.name);
+  const reader = new FileReader();
+  reader.onload = ev => ext === 'csv' ? parseCSV(ev.target.result) : parseExcel(ev.target.result);
+  if (ext === 'csv') reader.readAsText(file); else reader.readAsArrayBuffer(file);
+}
+
+function setDzLoaded(name) {
+  document.getElementById('dropzone').classList.add('loaded');
+  document.getElementById('dzLabel').textContent = `📄 ${name}`;
+  document.getElementById('dzSub').textContent   = 'Click or drag to replace';
+  document.getElementById('clearBtn').style.display = '';
+}
+
+function parseCSV(text) {
+  const r = Papa.parse(text, { header: true, skipEmptyLines: true });
+  ingest(r.data, r.errors.map(e => ({ t:'warn', m:`Row ${(e.row||0)+2}: ${e.message}` })));
+}
+function parseExcel(buf) {
+  try {
+    const wb = XLSX.read(buf, { type:'array' });
+    ingest(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval:'' }), []);
+  } catch(e) { showAlerts([{t:'err', m:`Cannot parse Excel: ${e.message}`}]); }
+}
+async function loadGsheet() {
+  const raw = document.getElementById('gsUrl').value.trim();
+  if (!raw) return;
+  const m = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (!m) { showAlerts([{t:'err',m:'Invalid Google Sheets URL.'}]); return; }
+  const gid = (raw.match(/[?&]gid=(\d+)/) || [])[1] || '0';
+  const url = `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    parseCSV(await res.text());
+    setDzLoaded('Google Sheet');
+    document.getElementById('gsUrl').value = '';
+  } catch(e) { showAlerts([{t:'err', m:`Could not load sheet: ${e.message}. Make sure it's shared publicly.`}]); }
+}
+
+// ═══════════════════════════════════════
+// Normalize + process
+// ═══════════════════════════════════════
+function norm(rawRows) {
+  return rawRows.map(r => {
+    const n = {};
+    for (const [k,v] of Object.entries(r)) n[k.trim().toLowerCase().replace(/\s+/g,'_')] = v;
+    return n;
+  });
+}
+function ingest(raw, warns) { rows = norm(raw); processRows(warns); }
+
+function processRows(parseWarns = []) {
+  const fm = fromMode(), tm = toMode();
+  const errs = [...parseWarns];
+  if (!rows.length) { showAlerts([{t:'err',m:'The file is empty.'}]); return; }
+
+  const cols = Object.keys(rows[0]);
+  if (!cols.includes('subject'))             errs.push({t:'err', m:'Missing required column: "subject"'});
+  if (!cols.includes('body'))                errs.push({t:'err', m:'Missing required column: "body"'});
+  if (fm==='file' && !cols.includes('from')) errs.push({t:'err', m:'Missing "from" column — or switch FROM to Random mode.'});
+  if (tm==='file' && !cols.includes('to'))   errs.push({t:'err', m:'Missing "to" column — or switch TO to Random mode.'});
+  if (errs.some(e=>e.t==='err')) { showAlerts(errs); hideList(); hideImportBar(); return; }
+
+  readyPayloads = [];
+  _expectedInboxes = {};
+  const statuses = [];
+  const rowWarns = [];
+
+  rows.forEach((row, i) => {
+    const inboxVal = String(row.inbox || '').trim();
+    if (inboxVal) _expectedInboxes[i] = inboxVal;
+    const issues = [];
+    if (fm==='file' && !String(row.from||'').trim()) issues.push('empty from');
+    if (tm==='file' && !String(row.to  ||'').trim()) issues.push('empty to');
+
+    const subject = String(row.subject||'').trim();
+    const body    = String(row.body   ||'').trim();
+    const now     = Math.floor(Date.now()/1000);
+    const extId   = `${now}_${slugify(subject||'msg')}_${i}`;
+    const fromHandle = fm==='random' ? randEmail() : String(row.from||'').trim();
+    const fromName   = fm==='random' ? randName()  : undefined;
+    const toHandle   = tm==='random' ? randEmail() : String(row.to  ||'').trim();
+
+    const payload = {
+      sender:      fromName ? {handle:fromHandle, name:fromName} : {handle:fromHandle},
+      to:          [toHandle],
+      subject, body, body_format:'html', type:'email',
+      external_id: extId, created_at: now,
+      metadata:    { thread_ref: extId, is_inbound: true, is_archived: false, should_skip_rules: false },
+    };
+
+    if (issues.length) {
+      rowWarns.push({t:'warn', m:`Row ${i+2}: ${issues.join(', ')}`});
+      statuses.push({ok:false, msg:issues.join(', '), from:fromHandle, to:toHandle});
+    } else {
+      readyPayloads.push({payload, rowIndex:i});
+      statuses.push({ok:true, from:fromHandle, to:toHandle});
+    }
+  });
+
+  showAlerts([
+    ...errs, ...rowWarns,
+    readyPayloads.length
+      ? {t:'ok', m:`${readyPayloads.length} message${readyPayloads.length!==1?'s':''} ready to import${rowWarns.length?` (${rowWarns.length} skipped)`:''}. Throttled at 50/min.`}
+      : {t:'err', m:'No valid rows to import.'}
+  ]);
+
+  renderList(statuses, fm, tm);
+  if (readyPayloads.length) showImportBar(); else hideImportBar();
+}
+
+// ═══════════════════════════════════════
+// Alerts
+// ═══════════════════════════════════════
+function showAlerts(items) {
+  document.getElementById('validArea').innerHTML = items.map(({t,m}) =>
+    `<div class="alert ${t==='err'?'a-err':t==='warn'?'a-warn':'a-ok'}">${esc(m)}</div>`
+  ).join('');
+}
+
+// ═══════════════════════════════════════
+// Message list
+// ═══════════════════════════════════════
+function renderList(statuses, fm, tm) {
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('listHeader').classList.remove('hidden');
+  document.getElementById('previewMeta').textContent = `${rows.length} row${rows.length!==1?'s':''}`;
+
+  document.getElementById('tBody').innerHTML = rows.map((row, i) => {
+    const st = statuses[i];
+    const rowCls = st.ok ? '' : 'row-fail';
+    const expInbox = esc(String(row.inbox||''));
+    return `<div class="msg-row ${rowCls}" id="tr-${i}">
+      <div class="row-num">${i+1}</div>
+      <div class="row-stat" id="st-${i}"><span class="badge b-queued">Queued</span></div>
+      <div class="row-subj" title="${esc(String(row.subject||''))}">${esc(String(row.subject||'').slice(0,80))}</div>
+      <div class="row-body" title="${esc(String(row.body||''))}">${esc(String(row.body||'').slice(0,100))}</div>
+      <div class="row-from" title="${esc(st.from||'')}">${esc(st.from||'—')}</div>
+      <div class="row-to"   title="${esc(st.to||'')}">${esc(st.to||'—')}</div>
+      <div class="row-inbox-exp" id="exp-${i}" title="${expInbox}">${expInbox||'<span style="color:var(--text-3)">—</span>'}</div>
+      <div class="row-inbox-add" id="add-${i}"><span style="color:var(--text-3)">—</span></div>
+      <div class="row-match"     id="match-${i}"><span style="color:var(--text-3)">—</span></div>
+    </div>`;
+  }).join('');
+}
+
+function setRowStatus(i, type, msg) {
+  const el = document.getElementById(`st-${i}`);
+  if (!el) return;
+  const cls = {ok:'b-ok', fail:'b-fail', loading:'b-importing', skip:'b-skip'}[type] || 'b-queued';
+  el.innerHTML = `<span class="badge ${cls}${type==='loading'?' pulse':''}">${esc(msg)}</span>`;
+  const row = document.getElementById(`tr-${i}`);
+  if (row) {
+    row.classList.remove('row-fail','row-imported');
+    if (type==='ok')   row.classList.add('row-imported');
+    if (type==='fail') row.classList.add('row-fail');
+  }
+  if (!_rowResults[i]) _rowResults[i] = {};
+  _rowResults[i].importOk  = type === 'ok';
+  _rowResults[i].importMsg = msg;
+}
+
+function hideList() {
+  document.getElementById('emptyState').classList.remove('hidden');
+  document.getElementById('listHeader').classList.add('hidden');
+  document.getElementById('tBody').innerHTML = '';
+  document.getElementById('previewMeta').textContent = '';
+}
+
+function showImportBar() {
+  document.getElementById('importBar').classList.remove('hidden');
+  document.getElementById('stateIdle').classList.remove('hidden');
+  document.getElementById('stateRunning').classList.add('hidden');
+  document.getElementById('stateDone').classList.add('hidden');
+  document.getElementById('readyLabel').textContent =
+    `${readyPayloads.length} message${readyPayloads.length!==1?'s':''} ready to import`;
+}
+function hideImportBar() { document.getElementById('importBar').classList.add('hidden'); }
+
+// ═══════════════════════════════════════
+// Import
+// ═══════════════════════════════════════
+async function startImport() {
+  const inboxId = _selectedInbox?.id;
+  if (!inboxId) { alert('Select an inbox first.'); return; }
+  if (!readyPayloads.length) return;
+
+  document.getElementById('stateIdle').classList.add('hidden');
+  document.getElementById('stateRunning').classList.remove('hidden');
+  _importStart = Date.now();
+
+  readyPayloads.forEach(({rowIndex}) => setRowStatus(rowIndex, 'loading', '↑ Importing…'));
+
+  const res = await post('/api/queue-import', { token: _token, inbox_id: inboxId, payloads: readyPayloads, expectedInboxes: _expectedInboxes });
+  if (!res.ok) {
+    alert(res.error || 'Failed to start import.');
+    document.getElementById('stateIdle').classList.remove('hidden');
+    document.getElementById('stateRunning').classList.add('hidden');
+    return;
+  }
+
+  _pollTimer = setInterval(pollStatus, 1500);
+}
+
+async function pollStatus() {
+  try {
+    const d = await fetch('/api/import-status').then(r=>r.json());
+    const { status, total, processed, phase, pause_remaining, results, webhookResults } = d;
+
+    for (const [idx, r] of Object.entries(results||{})) {
+      const i = parseInt(idx);
+      if (r.ok) setRowStatus(i, 'ok',   '✓ Imported');
+      else      setRowStatus(i, 'fail', `✗ ${r.msg||'Error'}`);
+    }
+
+    for (const [idx, w] of Object.entries(webhookResults||{})) {
+      const i = parseInt(idx);
+      const addEl   = document.getElementById(`add-${i}`);
+      const matchEl = document.getElementById(`match-${i}`);
+      if (addEl)   addEl.textContent   = w.addedInbox || '—';
+      if (matchEl) {
+        if (w.match === null) {
+          matchEl.innerHTML = '<span style="color:var(--text-3)">N/A</span>';
+        } else if (w.match) {
+          matchEl.innerHTML = '<span class="badge b-ok">✓ Yes</span>';
+        } else {
+          matchEl.innerHTML = '<span class="badge b-fail">✗ No</span>';
+        }
+      }
+    }
+
+    const pct = total ? Math.round((processed/total)*100) : 0;
+    document.getElementById('progBar').style.width = `${pct}%`;
+    document.getElementById('progFrac').textContent = `${processed} / ${total}`;
+
+    if (phase === 'pausing') {
+      document.getElementById('progLabel').textContent = `Pausing between batches`;
+      document.getElementById('progSub').textContent   = `Batch ${Math.ceil(processed/50)} of ${Math.ceil(total/50)} complete. Resuming in ${pause_remaining}s…`;
+      const tt = document.getElementById('timeTag');
+      tt.textContent = `⏸ ${pause_remaining}s`;
+      tt.className = 'time-tag pausing';
+    } else {
+      document.getElementById('progLabel').textContent = `Importing ${processed} of ${total}…`;
+      document.getElementById('progSub').textContent   = `${total - processed} remaining`;
+      const tt = document.getElementById('timeTag');
+      if (processed > 0 && _importStart) {
+        const elapsed = (Date.now() - _importStart) / 1000;
+        const secsLeft = Math.round(((total - processed) / processed) * elapsed);
+        tt.textContent = `⏱ ~${fmtTime(secsLeft)} left`;
+      }
+      tt.className = 'time-tag';
+    }
+
+    // Scroll latest success into view
+    const lastOk = Object.entries(results||{}).filter(([,r])=>r.ok).map(([i])=>parseInt(i)).sort((a,b)=>b-a)[0];
+    if (lastOk !== undefined) document.getElementById(`tr-${lastOk}`)?.scrollIntoView({block:'nearest',behavior:'smooth'});
+
+    if (status === 'done') {
+      clearInterval(_pollTimer); _pollTimer = null;
+      const ok   = Object.values(results||{}).filter(r=>r.ok).length;
+      const fail = Object.values(results||{}).filter(r=>!r.ok).length;
+      document.getElementById('stateRunning').classList.add('hidden');
+      document.getElementById('stateDone').classList.remove('hidden');
+      document.getElementById('sTotal').textContent = total;
+      document.getElementById('sOk').textContent    = ok;
+      document.getElementById('sFail').textContent  = fail;
+    }
+  } catch {}
+}
+
+function fmtTime(s) {
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s/60)}m ${s%60}s`;
+}
+
+// ═══════════════════════════════════════
+// CSV export
+// ═══════════════════════════════════════
+function downloadCSV() {
+  const cell = v => { const s=String(v??''); return s.includes(',')||s.includes('"')||s.includes('\n')?`"${s.replace(/"/g,'""')}"`:s; };
+  const lines = [['row','subject','body','from','to','status'].join(',')];
+  rows.forEach((row, i) => {
+    const r = _rowResults[i]||{};
+    lines.push([i+1,cell(row.subject),cell(row.body),cell(row.from||''),cell(row.to||''),
+                cell(r.importOk===true?'imported':r.importOk===false?'failed':'skipped')].join(','));
+  });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'})),
+    download: `front-import-${Date.now()}.csv`,
+  });
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// ═══════════════════════════════════════
+// Reset
+// ═══════════════════════════════════════
+function clearFile() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  rows = []; readyPayloads = []; _rowResults = {};
+  const dz = document.getElementById('dropzone');
+  dz.classList.remove('loaded','over');
+  document.getElementById('dzLabel').textContent = 'Drop a file here, or click to browse';
+  document.getElementById('dzSub').textContent   = 'CSV · Excel (.xlsx / .xls)';
+  document.getElementById('fileInput').value     = '';
+  document.getElementById('clearBtn').style.display = 'none';
+  document.getElementById('validArea').innerHTML = '';
+  hideList();
+  hideImportBar();
+}
+
+function resetAll() {
+  clearFile();
+  _selectedInbox = null;
+  post('/api/reset', {}).catch(()=>{});
+  window.scrollTo({top:0});
+}
+
+// Inbox list click delegation
+document.getElementById('inboxList').addEventListener('click', e => {
+  const item = e.target.closest('.inbox-item');
+  if (item) selectInbox(item.dataset.id, item.dataset.name);
+});
+
+// Init
+onModeChange();
+</script>
+</body>
+</html>

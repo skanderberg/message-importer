@@ -1,0 +1,197 @@
+const express = require('express');
+const path    = require('path');
+
+const app  = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ─── Import queue state ───────────────────────────────────────────────────────
+let _job = {
+  status: 'idle', total: 0, processed: 0,
+  results: {}, phase: '', pauseRemaining: 0,
+  // conversation lookup: rowIndex → { externalId, conversationId }
+  convLookup: {},
+  // expected inboxes: rowIndex → inboxName string
+  expectedInboxes: {},
+  // webhook results: rowIndex → { addedInbox, match }
+  webhookResults: {},
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function errMsg(data) {
+  const e = data?._error;
+  if (!e) return data?.message || null;
+  return typeof e === 'object' ? (e.message || JSON.stringify(e)) : String(e);
+}
+
+async function frontGet(path, token) {
+  const res  = await fetch(`https://api2.frontapp.com${path}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function frontPost(path, token, body) {
+  const res  = await fetch(`https://api2.frontapp.com${path}`, {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch (_) { data = { raw: text }; }
+  return { ok: res.ok, status: res.status, data };
+}
+
+// Look up conversation ID via alt:uid, retrying a few times to allow indexing
+async function fetchConversationId(externalId, token) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await sleep(attempt === 0 ? 3000 : 4000);
+    try {
+      const r = await frontGet(`/messages/alt:uid:${encodeURIComponent(externalId)}`, token);
+      if (r.ok && r.data?.conversation_id) return r.data.conversation_id;
+      if (r.ok && r.data?._results?.[0]?.conversation_id) return r.data._results[0].conversation_id;
+    } catch (_) {}
+  }
+  return null;
+}
+
+// ─── Routes ──────────────────────────────────────────────────────────────────
+
+app.post('/api/validate', async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ ok: false, error: 'Missing token.' });
+  try {
+    const r = await frontGet('/me', token);
+    res.status(r.status).json({ ok: r.ok, data: r.data });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post('/api/list-inboxes', async (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(400).json({ ok: false, error: 'Missing token.' });
+  try {
+    let inboxes = [], url = '/inboxes';
+    while (url) {
+      const r = await frontGet(url, token);
+      if (!r.ok) return res.status(r.status).json({ ok: false, error: errMsg(r.data) || `HTTP ${r.status}` });
+      inboxes = inboxes.concat(r.data._results || []);
+      const next = r.data._pagination?.next;
+      url = next ? new URL(next).pathname + new URL(next).search : null;
+    }
+    const shared = inboxes.filter(i => i.type === 'shared');
+    res.json({ ok: true, inboxes: shared.map(i => ({ id: i.id, name: i.name })) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Queue import — accepts expectedInboxes map alongside payloads
+app.post('/api/queue-import', (req, res) => {
+  if (_job.status === 'running') return res.status(409).json({ ok: false, error: 'Import already running.' });
+
+  const { token, inbox_id, payloads, expectedInboxes } = req.body;
+  if (!token || !inbox_id || !Array.isArray(payloads) || !payloads.length)
+    return res.status(400).json({ ok: false, error: 'Missing token, inbox_id, or payloads.' });
+
+  _job = {
+    status: 'running', total: payloads.length, processed: 0,
+    results: {}, phase: 'importing', pauseRemaining: 0,
+    convLookup: {}, expectedInboxes: expectedInboxes || {}, webhookResults: {},
+  };
+
+  (async () => {
+    const BATCH = 50, WIN = 60_000;
+    for (let i = 0; i < payloads.length; i += BATCH) {
+      const batch = payloads.slice(i, i + BATCH);
+      const t0    = Date.now();
+      for (const { payload, rowIndex } of batch) {
+        try {
+          const r = await frontPost(`/inboxes/${inbox_id}/imported_messages`, token, payload);
+          _job.results[rowIndex] = { ok: r.ok, msg: r.ok ? 'Imported' : (errMsg(r.data) || `HTTP ${r.status}`) };
+          if (r.ok) {
+            // Async: look up conversation ID via alt:uid (don't block the import loop)
+            const extId = payload.external_id;
+            fetchConversationId(extId, token).then(convId => {
+              if (convId) _job.convLookup[rowIndex] = { externalId: extId, conversationId: convId };
+            });
+          }
+        } catch (err) {
+          _job.results[rowIndex] = { ok: false, msg: err.message };
+        }
+        _job.processed++;
+      }
+      if (i + BATCH < payloads.length) {
+        const deadline = Date.now() + Math.max(0, WIN - (Date.now() - t0));
+        _job.phase = 'pausing';
+        while (Date.now() < deadline) { _job.pauseRemaining = Math.ceil((deadline - Date.now()) / 1000); await sleep(500); }
+        _job.phase = 'importing'; _job.pauseRemaining = 0;
+      }
+    }
+    _job.status = 'done'; _job.phase = '';
+  })();
+
+  res.json({ ok: true });
+});
+
+// Poll import progress — includes convLookup and webhookResults
+app.get('/api/import-status', (_req, res) => {
+  res.json({
+    status: _job.status, total: _job.total, processed: _job.processed,
+    phase: _job.phase, pause_remaining: _job.pauseRemaining,
+    results: _job.results, webhookResults: _job.webhookResults,
+    convLookup: _job.convLookup,
+  });
+});
+
+// ─── Webhook endpoint (configure in Front: http://your-host/webhook) ─────────
+app.post('/webhook', (req, res) => {
+  res.status(200).send('ok'); // respond immediately
+
+  try {
+    const body = req.body;
+
+    // Front webhook payload structure varies; try multiple locations for conversation + inboxes
+    const conv = body?.payload || body;
+    const convId = conv?.id || conv?.conversation_id;
+    if (!convId) return;
+
+    // Extract inbox name from the conversation object
+    const inboxes = conv?.inboxes || conv?.inbox ? [conv.inbox] : [];
+    const inboxName = inboxes[0]?.name || null;
+    if (!inboxName) return;
+
+    // Find which row owns this conversation ID
+    for (const [rowIdx, lookup] of Object.entries(_job.convLookup)) {
+      if (lookup.conversationId === convId) {
+        const expected = (_job.expectedInboxes[rowIdx] || '').trim().toLowerCase();
+        const added    = inboxName.trim();
+        const match    = expected ? added.toLowerCase() === expected : null;
+        _job.webhookResults[rowIdx] = { addedInbox: added, match };
+      }
+    }
+  } catch (_) {}
+});
+
+// Reset
+app.post('/api/reset', (_req, res) => {
+  _job = {
+    status: 'idle', total: 0, processed: 0, results: {}, phase: '', pauseRemaining: 0,
+    convLookup: {}, expectedInboxes: {}, webhookResults: {},
+  };
+  res.json({ ok: true });
+});
+
+app.listen(PORT, () => {
+  console.log(`\n  Front Message Importer`);
+  console.log(`  ──────────────────────`);
+  console.log(`  http://localhost:${PORT}`);
+  console.log(`  Webhook URL: http://localhost:${PORT}/webhook\n`);
+});
