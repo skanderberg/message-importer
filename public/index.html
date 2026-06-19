@@ -468,7 +468,7 @@
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin-bottom:3px">Required columns</div>
           <code style="font-size:11.5px;color:var(--front-purple)">subject &nbsp; body</code>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin:7px 0 3px">Optional columns</div>
-          <code style="font-size:11.5px;color:var(--text-3)">from &nbsp; to &nbsp; inbox</code>
+          <code style="font-size:11.5px;color:var(--text-3)">from &nbsp; to &nbsp; inbox / expected inbox</code>
         </div>
         <div style="margin-top:8px;font-size:11.5px;color:var(--text-3);line-height:1.55">
           Rate limit: <strong style="color:var(--text-2)">50 msgs / min</strong>. Larger imports pause automatically between batches.
@@ -853,7 +853,7 @@ function processRows(parseWarns = []) {
   const rowWarns = [];
 
   rows.forEach((row, i) => {
-    const inboxVal = String(row.inbox || '').trim();
+    const inboxVal = String(row.inbox || row.expected_inbox || row['expected inbox'] || '').trim();
     if (inboxVal) _expectedInboxes[i] = inboxVal;
     const issues = [];
     if (fm==='file' && !String(row.from||'').trim()) issues.push('empty from');
@@ -915,7 +915,7 @@ function renderList(statuses, fm, tm) {
   document.getElementById('tBody').innerHTML = rows.map((row, i) => {
     const st = statuses[i];
     const rowCls = st.ok ? '' : 'row-fail';
-    const expInbox = esc(String(row.inbox||''));
+    const expInbox = esc(String(row.inbox || row.expected_inbox || row['expected inbox'] || ''));
     return `<div class="msg-row ${rowCls}" id="tr-${i}">
       <div class="row-num">${i+1}</div>
       <div class="row-stat" id="st-${i}"><span class="badge b-queued">Queued</span></div>
