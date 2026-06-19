@@ -11,13 +11,25 @@ app.use(express.static(path.join(__dirname, 'public')));
 let _job = {
   status: 'idle', total: 0, processed: 0,
   results: {}, phase: '', pauseRemaining: 0,
-  // conversation lookup: rowIndex → { externalId, conversationId }
-  convLookup: {},
-  // expected inboxes: rowIndex → inboxName string
-  expectedInboxes: {},
-  // webhook results: rowIndex → { addedInbox, match }
-  webhookResults: {},
+  convLookup: {}, expectedInboxes: {}, webhookResults: {},
 };
+
+// Buffer webhooks that arrive before convLookup is populated
+let _pendingWebhooks = []; // [{ convId, inboxName }]
+
+function applyWebhook(convId, inboxName) {
+  const rowIdx = _job.convLookup[convId];
+  if (rowIdx === undefined) return false;
+  const expected = (_job.expectedInboxes[rowIdx] || '').trim().toLowerCase();
+  const added    = inboxName.trim();
+  const match    = expected ? added.toLowerCase() === expected : null;
+  _job.webhookResults[rowIdx] = { addedInbox: added, match };
+  return true;
+}
+
+function flushPendingWebhooks() {
+  _pendingWebhooks = _pendingWebhooks.filter(({ convId, inboxName }) => !applyWebhook(convId, inboxName));
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -75,7 +87,7 @@ async function fetchConversationId(externalId, token) {
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 
-app.get('/api/version', (_req, res) => res.json({ version: 'webhook-fix-v8', built: '2026-06-19' }));
+app.get('/api/version', (_req, res) => res.json({ version: 'webhook-buffer-v9', built: '2026-06-19' }));
 
 app.post('/api/validate', async (req, res) => {
   const { token } = req.body;
@@ -119,6 +131,7 @@ app.post('/api/queue-import', (req, res) => {
     results: {}, phase: 'importing', pauseRemaining: 0,
     convLookup: {}, expectedInboxes: expectedInboxes || {}, webhookResults: {},
   };
+  _pendingWebhooks = [];
 
   (async () => {
     const BATCH = 50, WIN = 60_000;
@@ -136,8 +149,9 @@ app.post('/api/queue-import', (req, res) => {
             if (uid) {
               fetchConversationId(uid, token).then(cid => {
                 if (cid) {
-                  _job.convLookup[cid] = rowIndex;   // keyed by conv ID for instant webhook match
+                  _job.convLookup[cid] = rowIndex;
                   _job.results[rowIndex].conv_id = cid;
+                  flushPendingWebhooks(); // apply any webhooks that arrived early
                 }
               });
             }
@@ -194,12 +208,9 @@ app.post('/webhook', (req, res) => {
 
     if (!convId || !inboxName) return;
 
-    const rowIdx = _job.convLookup[convId];
-    if (rowIdx !== undefined) {
-      const expected = (_job.expectedInboxes[rowIdx] || '').trim().toLowerCase();
-      const added    = inboxName.trim();
-      const match    = expected ? added.toLowerCase() === expected : null;
-      _job.webhookResults[rowIdx] = { addedInbox: added, match };
+    if (!applyWebhook(convId, inboxName)) {
+      // Conv ID not in lookup yet — buffer and retry when lookup fills up
+      _pendingWebhooks.push({ convId, inboxName });
     }
   } catch (e) { console.log('[webhook] error:', e.message); }
 });
