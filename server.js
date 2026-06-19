@@ -158,14 +158,12 @@ app.post('/webhook', (req, res) => {
   try {
     const body = req.body;
 
-    // Front webhook payload structure varies; try multiple locations for conversation + inboxes
-    const conv = body?.payload || body;
-    const convId = conv?.id || conv?.conversation_id;
+    // Conversation ID is at body.conversation.id
+    const convId = body?.conversation?.id;
     if (!convId) return;
 
-    // Extract inbox name from the conversation object
-    const inboxes = conv?.inboxes || conv?.inbox ? [conv.inbox] : [];
-    const inboxName = inboxes[0]?.name || null;
+    // Inbox name is in target.data[0].name for "move" events
+    const inboxName = body?.target?.data?.[0]?.name || null;
     if (!inboxName) return;
 
     // Find which row owns this conversation ID
