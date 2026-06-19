@@ -728,18 +728,22 @@ function renderInboxList(query) {
 
   const list = document.getElementById('inboxList');
   if (!matches.length) {
-    list.innerHTML = `<div class="inbox-no-results">${q ? 'No inboxes match "' + esc(query) + '"' : 'No shared inboxes found'}</div>`;
+    list.innerHTML = `<div class="inbox-no-results">${q ? 'No inboxes match "' + esc(query) + '"' : 'No inboxes found'}</div>`;
     return;
   }
 
-  list.innerHTML = matches.map(inbox => {
+  const LIMIT = 50;
+  const visible = matches.slice(0, LIMIT);
+  const extra   = matches.length - LIMIT;
+
+  list.innerHTML = visible.map(inbox => {
     const isSelected = _selectedInbox?.id === inbox.id;
     const nameHtml   = q ? highlightMatch(inbox.name, q) : esc(inbox.name);
     return `<div class="inbox-item${isSelected?' selected':''}" data-id='${inbox.id}' data-name='${inbox.name}'>
       <span class="inbox-item-name">${nameHtml}</span>
       <span class="inbox-item-id">${esc(inbox.id)}</span>
     </div>`;
-  }).join('');
+  }).join('') + (extra > 0 ? `<div class="inbox-no-results">+ ${extra} more — type to search</div>` : '');
 }
 
 function highlightMatch(text, q) {
