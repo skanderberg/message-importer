@@ -126,13 +126,22 @@ app.post('/api/queue-import', (req, res) => {
       for (const { payload, rowIndex } of batch) {
         try {
           const r = await frontPost(`/inboxes/${inbox_id}/imported_messages`, token, payload);
-          _job.results[rowIndex] = { ok: r.ok, msg: r.ok ? 'Imported' : (errMsg(r.data) || `HTTP ${r.status}`) };
+          console.log(`[import row ${rowIndex}] status=${r.status} body=`, JSON.stringify(r.data).slice(0, 200));
+          _job.results[rowIndex] = { ok: r.ok, msg: r.ok ? 'Imported' : (errMsg(r.data) || `HTTP ${r.status}`), importResponse: r.data };
           if (r.ok) {
-            // Async: look up conversation ID via alt:uid (don't block the import loop)
             const extId = payload.external_id;
-            fetchConversationId(extId, token).then(convId => {
-              if (convId) _job.convLookup[rowIndex] = { externalId: extId, conversationId: convId };
-            });
+            // Check if import response directly contains message/conversation ID
+            const directConvId = r.data?.conversation_id || r.data?.conversation?.id
+              || r.data?._links?.related?.conversation?.split('/').pop();
+            if (directConvId) {
+              _job.convLookup[rowIndex] = { externalId: extId, conversationId: directConvId };
+            } else {
+              // Fall back to alt:uid lookup
+              fetchConversationId(extId, token).then(convId => {
+                if (convId) _job.convLookup[rowIndex] = { externalId: extId, conversationId: convId };
+                else console.log(`[row ${rowIndex}] conv ID lookup failed for uid: ${extId}`);
+              });
+            }
           }
         } catch (err) {
           _job.results[rowIndex] = { ok: false, msg: err.message };
@@ -150,6 +159,14 @@ app.post('/api/queue-import', (req, res) => {
   })();
 
   res.json({ ok: true });
+});
+
+// Debug: test alt:uid lookup + show last import response
+app.post('/api/debug-lookup', async (req, res) => {
+  const { token, external_id } = req.body;
+  if (!token || !external_id) return res.status(400).json({ error: 'Need token and external_id' });
+  const r = await frontGet(`/messages/alt:uid:${encodeURIComponent(external_id)}`, token);
+  res.json({ status: r.status, ok: r.ok, data: r.data });
 });
 
 // Poll import progress — includes convLookup and webhookResults
