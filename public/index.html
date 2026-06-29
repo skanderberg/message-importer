@@ -588,13 +588,11 @@
 // ═══════════════════════════════════════
 // Constants
 // ═══════════════════════════════════════
-const FIRSTS  = ['Alex','Blake','Casey','Dana','Ellis','Finn','Gray','Harper','Indira','Jordan','Kelly','Lane','Morgan','Noel','Parker','Quinn','Riley','Sam','Taylor','Uma','Valerie','Wren','Xen','Yael','Zara'];
-const LASTS   = ['Smith','Johnson','Lee','Kim','Garcia','Brown','Wilson','Moore','Taylor','Davis','Martinez','Anderson','Thomas','Jackson','White','Harris'];
-const DOMAINS = ['testmail.io','sampledomain.dev','inbox-test.com','demo.io','example.org'];
+const RANDOM_EMAILS = ['leyton@finalproduction.club','sarah@zestymedia.club','hector@finalproduction.club','pierre@auditlawyer.club'];
 
 const pick      = a => a[Math.floor(Math.random() * a.length)];
-const randEmail = () => `${pick(FIRSTS).toLowerCase()}.${pick(LASTS).toLowerCase()}@${pick(DOMAINS)}`;
-const randName  = () => `${pick(FIRSTS)} ${pick(LASTS)}`;
+const randEmail = () => pick(RANDOM_EMAILS);
+const randName  = () => pick(RANDOM_EMAILS).split('@')[0].split('.').map(w=>w[0].toUpperCase()+w.slice(1)).join(' ');
 const slugify   = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);
 const esc       = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const post      = (url, body) => fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }).then(r=>r.json().catch(()=>({})));
