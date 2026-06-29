@@ -1143,10 +1143,14 @@ function resetAll() {
 }
 
 async function redoImport() {
+  if (!rows.length) return;
+  // Regenerate payloads with fresh timestamps/external_ids to avoid duplicate rejection
+  processRows();
   if (!readyPayloads.length) return;
   document.getElementById('stateDone').classList.add('hidden');
   document.getElementById('matchSummary').classList.add('hidden');
   document.getElementById('redoBtn').style.display = 'none';
+  _rowResults = {};
   await startImport();
 }
 
