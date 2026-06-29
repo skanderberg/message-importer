@@ -568,6 +568,7 @@
           </div>
           <div style="margin-left:auto;display:flex;gap:8px">
             <button class="btn btn-outline btn-sm" onclick="downloadCSV()">⬇ Export CSV</button>
+            <button class="btn btn-outline btn-sm" onclick="redoImport()" id="redoBtn" style="display:none">↺ Redo import</button>
             <button class="btn btn-purple btn-sm" onclick="resetAll()">New import</button>
           </div>
         </div>
@@ -1061,6 +1062,7 @@ async function pollStatus() {
       const fail = Object.values(results||{}).filter(r=>!r.ok).length;
       document.getElementById('stateRunning').classList.add('hidden');
       document.getElementById('stateDone').classList.remove('hidden');
+      if (readyPayloads.length) document.getElementById('redoBtn').style.display = '';
       document.getElementById('sTotal').textContent = total;
       document.getElementById('sOk').textContent    = ok;
       document.getElementById('sFail').textContent  = fail;
@@ -1136,7 +1138,16 @@ function resetAll() {
   clearFile();
   _selectedInbox = null;
   post('/api/reset', {}).catch(()=>{});
+  document.getElementById('redoBtn').style.display = 'none';
   window.scrollTo({top:0});
+}
+
+async function redoImport() {
+  if (!readyPayloads.length) return;
+  document.getElementById('stateDone').classList.add('hidden');
+  document.getElementById('matchSummary').classList.add('hidden');
+  document.getElementById('redoBtn').style.display = 'none';
+  await startImport();
 }
 
 // Inbox list click delegation
