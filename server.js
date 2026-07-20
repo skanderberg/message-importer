@@ -16,14 +16,19 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── Import queue state ───────────────────────────────────────────────────────
+let _jobId = 0;
 let _job = {
-  status: 'idle', total: 0, processed: 0,
+  id: 0, status: 'idle', total: 0, processed: 0,
   results: {}, phase: '', pauseRemaining: 0,
-  convLookup: {}, expectedInboxes: {}, webhookResults: {},
+  convLookup: {}, expectedInboxes: {}, webhookResults: {}, draftResults: {},
+  token: null,
 };
 
 // Buffer webhooks that arrive before convLookup is populated
 let _pendingWebhooks = []; // [{ convId, inboxName }]
+let _pendingComments = []; // [{ convId, at }]
+const PENDING_COMMENT_TTL = 15 * 60_000; // drop unknown conv IDs after 15 min
+const PENDING_COMMENT_MAX = 500;
 
 function applyWebhook(convId, inboxName) {
   const rowIdx = _job.convLookup[convId];
@@ -37,6 +42,76 @@ function applyWebhook(convId, inboxName) {
 
 function flushPendingWebhooks() {
   _pendingWebhooks = _pendingWebhooks.filter(({ convId, inboxName }) => !applyWebhook(convId, inboxName));
+  const now = Date.now();
+  _pendingComments = _pendingComments.filter(({ convId, at }) =>
+    (now - at) < PENDING_COMMENT_TTL && !handleCommentEvent(convId));
+}
+
+// On a comment event, fetch the conversation's drafts and record the latest one
+function handleCommentEvent(convId) {
+  const rowIdx = _job.convLookup[convId];
+  if (rowIdx === undefined) return false;
+  fetchDraftsForRow(convId, rowIdx);
+  return true;
+}
+
+function queuePendingComment(convId) {
+  const now = Date.now();
+  _pendingComments = _pendingComments.filter(p => (now - p.at) < PENDING_COMMENT_TTL);
+  if (_pendingComments.some(p => p.convId === convId)) return;
+  if (_pendingComments.length >= PENDING_COMMENT_MAX) _pendingComments.shift();
+  _pendingComments.push({ convId, at: now });
+}
+
+// Fetch drafts with retries — the draft may be created shortly AFTER the comment
+// webhook arrives. Retries for ~1 min before settling on "No draft".
+async function fetchDraftsForRow(convId, rowIdx) {
+  const job = _job; // capture — a reset/new import must not be mutated by this run
+  if (!job.token) {
+    console.log(`[drafts] no token stored for job — cannot fetch drafts for ${convId}`);
+    job.draftResults[rowIdx] = { error: 'No API token available to fetch drafts.' };
+    return;
+  }
+  const DELAYS = [0, 5000, 10000, 15000, 30000];
+  let lastErr = null;
+  for (const delay of DELAYS) {
+    if (delay) await sleep(delay);
+    if (job.id !== _job.id) return; // job was reset/replaced — discard stale work
+    try {
+      const r = await frontGet(`/conversations/${encodeURIComponent(convId)}/drafts`, job.token);
+      if (job.id !== _job.id) return;
+      if (!r.ok) {
+        lastErr = errMsg(r.data) || `HTTP ${r.status}`;
+        console.log(`[drafts] convId=${convId} HTTP ${r.status}`);
+        continue;
+      }
+      lastErr = null;
+      const drafts = r.data?._results || [];
+      if (!drafts.length) {
+        job.draftResults[rowIdx] = { none: true };
+        continue; // keep retrying — draft may appear shortly
+      }
+      // Latest draft (highest created_at)
+      const latest = drafts.slice().sort((a, b) => (b.created_at || 0) - (a.created_at || 0))[0];
+      const text = String(latest.text || latest.body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      job.draftResults[rowIdx] = {
+        id: latest.id || null,
+        subject: latest.subject || '',
+        body: text,
+        author: latest.author?.email || latest.author?.username || null,
+        createdAt: latest.created_at || null,
+      };
+      console.log(`[drafts] convId=${convId} rowIdx=${rowIdx} draft="${text.slice(0, 80)}"`);
+      return;
+    } catch (e) {
+      lastErr = e.message;
+      console.log(`[drafts] convId=${convId} error:`, e.message);
+    }
+  }
+  if (job.id !== _job.id) return;
+  if (job.draftResults[rowIdx] === undefined) {
+    job.draftResults[rowIdx] = lastErr ? { error: lastErr } : { none: true };
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -135,11 +210,13 @@ app.post('/api/queue-import', (req, res) => {
     return res.status(400).json({ ok: false, error: 'Missing token, inbox_id, or payloads.' });
 
   _job = {
-    status: 'running', total: payloads.length, processed: 0,
+    id: ++_jobId, status: 'running', total: payloads.length, processed: 0,
     results: {}, phase: 'importing', pauseRemaining: 0,
-    convLookup: {}, expectedInboxes: expectedInboxes || {}, webhookResults: {},
+    convLookup: {}, expectedInboxes: expectedInboxes || {}, webhookResults: {}, draftResults: {},
+    token,
   };
   _pendingWebhooks = [];
+  _pendingComments = [];
 
   (async () => {
     const BATCH = 50, WIN = 60_000;
@@ -198,6 +275,7 @@ app.get('/api/import-status', (_req, res) => {
     status: _job.status, total: _job.total, processed: _job.processed,
     phase: _job.phase, pause_remaining: _job.pauseRemaining,
     results: _job.results, webhookResults: _job.webhookResults,
+    draftResults: _job.draftResults,
     convLookup: _job.convLookup, debugLookup: _job.debugLookup || null,
     debugImport: _job.debugImport || null, debugWebhook: _job.debugWebhook || null,
   });
@@ -214,10 +292,25 @@ app.post('/webhook', (req, res) => {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
     const convId = body?.conversation?.id;
     const inboxName = body?.target?.data?.[0]?.name || null;
-    console.log(`[webhook] convId=${convId} inboxName=${inboxName}`);
-    _job.debugWebhook = { convId, inboxName, rawSnippet: rawBody.slice(0, 500) };
 
-    if (!convId || !inboxName) return;
+    // Detect a "comment added" event (Front sends the comment as the target or type)
+    const isComment =
+      body?.type === 'comment' ||
+      body?.target?._meta?.type === 'comment' ||
+      !!body?.comment ||
+      (body?.target?.data && !Array.isArray(body.target.data) && body?.target?.data?.body !== undefined && !inboxName);
+
+    console.log(`[webhook] convId=${convId} inboxName=${inboxName} isComment=${isComment}`);
+    _job.debugWebhook = { convId, inboxName, isComment, rawSnippet: rawBody.slice(0, 500) };
+
+    if (!convId) return;
+
+    if (isComment) {
+      if (!handleCommentEvent(convId)) queuePendingComment(convId);
+      return;
+    }
+
+    if (!inboxName) return;
 
     if (!applyWebhook(convId, inboxName)) {
       _pendingWebhooks.push({ convId, inboxName });
@@ -231,9 +324,11 @@ app.post('/webhook', (req, res) => {
 // Reset
 app.post('/api/reset', (_req, res) => {
   _job = {
-    status: 'idle', total: 0, processed: 0, results: {}, phase: '', pauseRemaining: 0,
-    convLookup: {}, expectedInboxes: {}, webhookResults: {},
+    id: ++_jobId, status: 'idle', total: 0, processed: 0, results: {}, phase: '', pauseRemaining: 0,
+    convLookup: {}, expectedInboxes: {}, webhookResults: {}, draftResults: {}, token: null,
   };
+  _pendingWebhooks = [];
+  _pendingComments = [];
   res.json({ ok: true });
 });
 

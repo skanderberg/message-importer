@@ -1,0 +1,1 @@
+- [Git sync limitation](git-sync-limitation.md) — gitsafe blocks pull/fetch/push in ALL agent contexts (task agents too); user must pull via Git pane; no auto-deploy on GitHub push.
