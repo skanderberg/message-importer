@@ -91,16 +91,16 @@ async function fetchDrafts(convId, rowIndex, token) {
   }
 }
 
-// ─── Draft quality scoring (Hugging Face — open-source model) ────────────────
-const HF_MODEL = 'meta-llama/Llama-3.3-70B-Instruct';
+// ─── Draft quality scoring (OpenAI) ──────────────────────────────────────────
+const SCORING_MODEL = 'gpt-4o';
 
 async function scoreDraft(rowIndex) {
   const human = (_job.humanDrafts[rowIndex] || '').trim();
   const draft = (_job.drafts[rowIndex]?.body || '').trim();
   if (!human || !draft) return;                 // nothing to compare against
   if (_job.scores[rowIndex]?.status === 'pending' || _job.scores[rowIndex]?.status === 'done') return;
-  if (!process.env.HUGGINGFACE_API_KEY) {
-    _job.scores[rowIndex] = { status: 'error', error: 'HUGGINGFACE_API_KEY not configured' };
+  if (!process.env.OPENAI_API_KEY) {
+    _job.scores[rowIndex] = { status: 'error', error: 'OPENAI_API_KEY not configured' };
     return;
   }
 
@@ -126,17 +126,18 @@ Respond with ONLY a JSON object, no other text:
 {"score": <integer 1-10>, "explanation": "<thorough explanation of the score: what the draft got right, what it missed or got wrong compared to the human reply, and why you chose this score>"}`;
 
   try {
-    const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: HF_MODEL,
+        model: SCORING_MODEL,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.2,
         max_tokens: 700,
+        response_format: { type: 'json_object' },
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -160,7 +161,7 @@ Respond with ONLY a JSON object, no other text:
     _job.scores[rowIndex] = {
       status: 'done', score,
       explanation: String(parsed.explanation || '').trim(),
-      model: HF_MODEL,
+      model: SCORING_MODEL,
     };
     console.log(`[score] row=${rowIndex} score=${score}`);
   } catch (e) {
