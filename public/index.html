@@ -249,7 +249,6 @@
     .col-inbox-exp  { width: 130px; flex-shrink: 0; padding: 0 10px; }
     .col-inbox-add  { width: 130px; flex-shrink: 0; padding: 0 10px; }
     .col-match      { width: 70px;  flex-shrink: 0; padding: 0 10px; }
-    .col-draft      { width: 180px; flex-shrink: 0; padding: 0 10px; }
 
     .msg-row {
       display: flex; align-items: center;
@@ -274,7 +273,6 @@
     .row-inbox-exp { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
     .row-inbox-add { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
     .row-match     { width: 70px;  flex-shrink: 0; padding: 0 10px; }
-    .row-draft     { width: 180px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
 
     /* Status badges — Front style */
     .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -532,7 +530,6 @@
         <div class="col-inbox-exp">Expected Inbox</div>
         <div class="col-inbox-add">Added Inbox</div>
         <div class="col-match">Match</div>
-        <div class="col-draft">Autopilot Draft</div>
       </div>
       <div id="tBody"></div>
     </div>
@@ -604,7 +601,7 @@ const post      = (url, body) => fetch(url, { method:'POST', headers:{'Content-T
 // ═══════════════════════════════════════
 // State
 // ═══════════════════════════════════════
-let rows = [], readyPayloads = [], _rowResults = {}, _pollTimer = null, _importStart = null, _slowPoll = false;
+let rows = [], readyPayloads = [], _rowResults = {}, _pollTimer = null, _importStart = null;
 let _expectedInboxes = {}; // rowIndex → inbox name from file
 
 // ═══════════════════════════════════════
@@ -938,7 +935,6 @@ function renderList(statuses, fm, tm) {
       <div class="row-inbox-exp" id="exp-${i}" title="${expInbox}">${expInbox||'<span style="color:var(--text-3)">—</span>'}</div>
       <div class="row-inbox-add" id="add-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-match"     id="match-${i}"><span style="color:var(--text-3)">—</span></div>
-      <div class="row-draft"     id="draft-${i}"><span style="color:var(--text-3)">—</span></div>
     </div>`;
   }).join('');
 }
@@ -998,15 +994,13 @@ async function startImport() {
     return;
   }
 
-  if (_pollTimer) clearInterval(_pollTimer);
-  _slowPoll = false;
   _pollTimer = setInterval(pollStatus, 1500);
 }
 
 async function pollStatus() {
   try {
     const d = await fetch('/api/import-status').then(r=>r.json());
-    const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup, draftResults } = d;
+    const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup } = d;
 
     for (const [idx, r] of Object.entries(results||{})) {
       const convId = r.conv_id || (convLookup||{})[idx]?.conversationId;
@@ -1033,19 +1027,6 @@ async function pollStatus() {
         } else {
           matchEl.innerHTML = '<span class="badge b-fail">✗ No</span>';
         }
-      }
-    }
-
-    for (const [idx, dr] of Object.entries(draftResults||{})) {
-      const el = document.getElementById(`draft-${idx}`);
-      if (!el) continue;
-      if (dr.error) {
-        el.innerHTML = `<span style="color:var(--red)" title="${esc(dr.error)}">Error</span>`;
-      } else if (dr.none) {
-        el.innerHTML = '<span style="color:var(--text-3)">No draft</span>';
-      } else {
-        const preview = String(dr.body || dr.subject || '').slice(0, 120);
-        el.innerHTML = `<span title="${esc(dr.body || '')}">📝 ${esc(preview) || '(empty draft)'}</span>`;
       }
     }
 
@@ -1104,14 +1085,10 @@ async function pollStatus() {
       const successCount = ok;
       const convCount    = Object.keys(convLookup||{}).length;
       const wh           = whVals.length;
-      // Once everything settled (or after 2 min), keep a slow poll running
-      // so late-arriving Autopilot comments/drafts still show up.
-      const settled = (convCount >= successCount && wh >= successCount) ||
-                      (!_importStart || (Date.now() - _importStart) > 120_000);
-      if (settled && !_slowPoll) {
-        clearInterval(_pollTimer);
-        _slowPoll = true;
-        _pollTimer = setInterval(pollStatus, 5000);
+      if (convCount >= successCount && wh >= successCount) {
+        clearInterval(_pollTimer); _pollTimer = null;
+      } else if (!_importStart || (Date.now() - _importStart) > 120_000) {
+        clearInterval(_pollTimer); _pollTimer = null;
       }
     }
   } catch {}
@@ -1145,7 +1122,6 @@ function downloadCSV() {
 // ═══════════════════════════════════════
 function clearFile() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-  _slowPoll = false;
   rows = []; readyPayloads = []; _rowResults = {};
   const dz = document.getElementById('dropzone');
   dz.classList.remove('loaded','over');
