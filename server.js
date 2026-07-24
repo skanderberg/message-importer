@@ -120,10 +120,13 @@ ${human}
 AI-GENERATED DRAFT (to evaluate):
 ${draft}
 
-Score the AI draft from 1-10 on how well it matches the quality and substance of the human reply. Consider: (a) does it address the same customer issue and cover the key points the human covered, (b) factual/substantive accuracy relative to the human reply, (c) tone and professionalism, (d) completeness — missing commitments, steps, or details the human included, (e) anything incorrect or risky the human would not have said.
+Grade the AI draft against the human reply in three categories, each scored 1-5 (integer):
+- tone: professionalism, empathy, and voice compared to the human reply
+- content: does it address the same issue, cover the key points, and stay factually consistent with the human reply; penalize missing commitments/steps or anything incorrect or risky
+- formatting: structure, length, greeting/sign-off, readability compared to the human reply
 
 Respond with ONLY a JSON object, no other text:
-{"score": <integer 1-10>, "explanation": "<thorough explanation of the score: what the draft got right, what it missed or got wrong compared to the human reply, and why you chose this score>"}`;
+{"tone": <1-5>, "content": <1-5>, "formatting": <1-5>, "explanation": "<concise explanation (2-3 sentences) of the main strengths and gaps vs the human reply>"}`;
 
   try {
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -152,18 +155,21 @@ Respond with ONLY a JSON object, no other text:
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     let parsed = null;
     if (jsonMatch) { try { parsed = JSON.parse(jsonMatch[0]); } catch (_) {} }
-    if (!parsed || typeof parsed.score !== 'number') {
+    if (!parsed || typeof parsed.tone !== 'number' || typeof parsed.content !== 'number' || typeof parsed.formatting !== 'number') {
       console.log(`[score] row=${rowIndex} unparseable response: ${content.slice(0, 300)}`);
       _job.scores[rowIndex] = { status: 'error', error: 'Model returned an unparseable response' };
       return;
     }
-    const score = Math.max(1, Math.min(10, Math.round(parsed.score)));
+    const clamp5 = v => Math.max(1, Math.min(5, Math.round(v)));
+    const tone = clamp5(parsed.tone), cont = clamp5(parsed.content), fmt = clamp5(parsed.formatting);
+    const overall = Math.round((tone + cont + fmt) / 3 * 10) / 10;
     _job.scores[rowIndex] = {
-      status: 'done', score,
+      status: 'done',
+      tone, content: cont, formatting: fmt, score: overall,
       explanation: String(parsed.explanation || '').trim(),
       model: SCORING_MODEL,
     };
-    console.log(`[score] row=${rowIndex} score=${score}`);
+    console.log(`[score] row=${rowIndex} tone=${tone} content=${cont} formatting=${fmt} overall=${overall}`);
   } catch (e) {
     console.log(`[score] row=${rowIndex} error:`, e.message);
     if (jobRef === _job) _job.scores[rowIndex] = { status: 'error', error: e.message };

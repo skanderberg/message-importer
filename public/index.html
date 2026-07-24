@@ -296,6 +296,7 @@
     .score-good { background: #e2f7ea; color: #1a7f42; }
     .score-mid  { background: #fdf3dc; color: #9a6b00; }
     .score-bad  { background: #fde8e8; color: #c02929; }
+    .score-cats { display: block; font-size: 10.5px; color: var(--text-3); margin: 3px 0 2px; }
 
     /* Status badges — Front style */
     .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -607,8 +608,10 @@
           <span style="color:var(--text-3)">Pending: <strong id="sMatchPending">0</strong></span>
         </div>
         <div id="scoreSummary" class="hidden" style="margin-top:10px;padding:12px 16px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;font-size:13px;display:flex;gap:24px;flex-wrap:wrap;align-items:center">
-          <span>Draft quality: <strong>avg <span id="sScoreAvg">—</span></strong> · <strong>median <span id="sScoreMed">—</span></strong></span>
-          <span style="color:var(--text-2)">Range: <strong id="sScoreRange">—</strong></span>
+          <span>Draft quality (avg): <strong>Overall <span id="sScoreAvg">—</span></strong></span>
+          <span style="color:var(--text-2)">Tone: <strong id="sScoreTone">—</strong></span>
+          <span style="color:var(--text-2)">Content: <strong id="sScoreContent">—</strong></span>
+          <span style="color:var(--text-2)">Formatting: <strong id="sScoreFmt">—</strong></span>
           <span style="color:var(--text-2)">Scored: <strong id="sScoreN">0</strong></span>
           <span style="color:var(--text-3)">Pending: <strong id="sScorePending">0</strong></span>
         </div>
@@ -1106,9 +1109,10 @@ async function pollStatus() {
       } else if (sc.status === 'error') {
         el.innerHTML = `<span class="badge b-fail" title="${esc(sc.error||'')}">✗ Scoring failed</span>`;
       } else if (sc.status === 'done') {
-        const cls = sc.score >= 8 ? 'score-good' : sc.score >= 5 ? 'score-mid' : 'score-bad';
+        const cls = sc.score >= 4 ? 'score-good' : sc.score >= 2.5 ? 'score-mid' : 'score-bad';
         el.innerHTML =
-          `<div class="score-card"><span class="score-num ${cls}">${sc.score} / 10</span>\n${esc(sc.explanation||'')}</div>`;
+          `<div class="score-card"><span class="score-num ${cls}">Overall ${sc.score} / 5</span>` +
+          `<span class="score-cats">Tone ${sc.tone}/5 · Content ${sc.content}/5 · Formatting ${sc.formatting}/5</span>\n${esc(sc.explanation||'')}</div>`;
         if (_rowResults[idx]) _rowResults[idx].score = sc.score; else _rowResults[idx] = { score: sc.score };
       }
     }
@@ -1171,17 +1175,17 @@ async function pollStatus() {
       const expected = Object.keys(_humanDrafts).length;
       if (expected > 0) {
         const scVals = Object.values(scores||{});
-        const doneScores = scVals.filter(s => s.status === 'done').map(s => s.score).sort((a,b)=>a-b);
-        const n = doneScores.length;
+        const done = scVals.filter(s => s.status === 'done');
+        const n = done.length;
         document.getElementById('scoreSummary').classList.remove('hidden');
         document.getElementById('sScoreN').textContent = n;
         document.getElementById('sScorePending').textContent = Math.max(0, expected - scVals.filter(s => s.status === 'done' || s.status === 'error').length);
         if (n > 0) {
-          const avg = doneScores.reduce((a,b)=>a+b,0) / n;
-          const med = n % 2 ? doneScores[(n-1)/2] : (doneScores[n/2-1] + doneScores[n/2]) / 2;
-          document.getElementById('sScoreAvg').textContent = `${Math.round(avg*10)/10} / 10`;
-          document.getElementById('sScoreMed').textContent = `${Math.round(med*10)/10} / 10`;
-          document.getElementById('sScoreRange').textContent = `${doneScores[0]}–${doneScores[n-1]}`;
+          const avg = arr => `${Math.round(arr.reduce((a,b)=>a+b,0) / arr.length * 10) / 10} / 5`;
+          document.getElementById('sScoreAvg').textContent     = avg(done.map(s => s.score));
+          document.getElementById('sScoreTone').textContent    = avg(done.map(s => s.tone));
+          document.getElementById('sScoreContent').textContent = avg(done.map(s => s.content));
+          document.getElementById('sScoreFmt').textContent     = avg(done.map(s => s.formatting));
         }
       }
 
