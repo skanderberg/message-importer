@@ -92,7 +92,7 @@ async function fetchDrafts(convId, rowIndex, token) {
 }
 
 // ─── Draft quality scoring (OpenAI) ──────────────────────────────────────────
-const SCORING_MODEL = 'gpt-4o';
+const SCORING_MODEL = 'gpt-4o-mini';
 
 async function scoreDraft(rowIndex) {
   const human = (_job.humanDrafts[rowIndex] || '').trim();
