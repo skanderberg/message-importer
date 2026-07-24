@@ -1,0 +1,1 @@
+- [Draft quality scoring](draft-scoring.md) — HF router (OpenAI-compatible) + Llama 3.3 scores Autopilot drafts vs `outbound` column; async job writers must guard against job resets.

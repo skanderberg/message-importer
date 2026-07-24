@@ -20,7 +20,7 @@ let _job = {
   status: 'idle', total: 0, processed: 0,
   results: {}, phase: '', pauseRemaining: 0,
   convLookup: {}, expectedInboxes: {}, webhookResults: {},
-  drafts: {}, token: null,
+  drafts: {}, humanDrafts: {}, rowContext: {}, scores: {}, token: null,
 };
 
 // Buffer webhooks that arrive before convLookup is populated
@@ -62,10 +62,13 @@ function stripHtml(html) {
 // Autopilot may create the draft moments after the comment fires, so retry a few times.
 async function fetchDrafts(convId, rowIndex, token) {
   if (!token) return;
+  const jobRef = _job; // guard: drop results if the job is reset/replaced mid-flight
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await sleep(3000);
+    if (jobRef !== _job) return;
     try {
       const r = await frontGet(`/conversations/${convId}/drafts`, token);
+      if (jobRef !== _job) return;
       console.log(`[drafts] attempt=${attempt} conv=${convId} status=${r.status} count=${(r.data?._results||[]).length}`);
       if (!r.ok) continue;
       const drafts = r.data?._results || [];
@@ -80,10 +83,89 @@ async function fetchDrafts(convId, rowIndex, token) {
         count:  drafts.length,
         at:     latest.created_at || null,
       };
+      scoreDraft(rowIndex); // fire-and-forget quality scoring vs. human draft
       return;
     } catch (e) {
       console.log(`[drafts] attempt=${attempt} conv=${convId} error:`, e.message);
     }
+  }
+}
+
+// ─── Draft quality scoring (Hugging Face — open-source model) ────────────────
+const HF_MODEL = 'meta-llama/Llama-3.3-70B-Instruct';
+
+async function scoreDraft(rowIndex) {
+  const human = (_job.humanDrafts[rowIndex] || '').trim();
+  const draft = (_job.drafts[rowIndex]?.body || '').trim();
+  if (!human || !draft) return;                 // nothing to compare against
+  if (_job.scores[rowIndex]?.status === 'pending' || _job.scores[rowIndex]?.status === 'done') return;
+  if (!process.env.HUGGINGFACE_API_KEY) {
+    _job.scores[rowIndex] = { status: 'error', error: 'HUGGINGFACE_API_KEY not configured' };
+    return;
+  }
+
+  _job.scores[rowIndex] = { status: 'pending' };
+  const ctx = _job.rowContext[rowIndex] || {};
+  const jobRef = _job;
+
+  const prompt = `You are evaluating an AI-generated customer support draft reply against the reply a human agent actually sent, for the same inbound message.
+
+INBOUND MESSAGE:
+Subject: ${ctx.subject || '(none)'}
+Body: ${stripHtml(ctx.body) || '(none)'}
+
+HUMAN AGENT'S REPLY (reference standard):
+${human}
+
+AI-GENERATED DRAFT (to evaluate):
+${draft}
+
+Score the AI draft from 1-10 on how well it matches the quality and substance of the human reply. Consider: (a) does it address the same customer issue and cover the key points the human covered, (b) factual/substantive accuracy relative to the human reply, (c) tone and professionalism, (d) completeness — missing commitments, steps, or details the human included, (e) anything incorrect or risky the human would not have said.
+
+Respond with ONLY a JSON object, no other text:
+{"score": <integer 1-10>, "explanation": "<thorough explanation of the score: what the draft got right, what it missed or got wrong compared to the human reply, and why you chose this score>"}`;
+
+  try {
+    const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: HF_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: 700,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (jobRef !== _job) return; // job was reset while we waited
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || `HTTP ${res.status}`;
+      console.log(`[score] row=${rowIndex} HF error: ${JSON.stringify(msg).slice(0, 300)}`);
+      _job.scores[rowIndex] = { status: 'error', error: String(typeof msg === 'string' ? msg : JSON.stringify(msg)).slice(0, 200) };
+      return;
+    }
+    const content = data?.choices?.[0]?.message?.content || '';
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    let parsed = null;
+    if (jsonMatch) { try { parsed = JSON.parse(jsonMatch[0]); } catch (_) {} }
+    if (!parsed || typeof parsed.score !== 'number') {
+      console.log(`[score] row=${rowIndex} unparseable response: ${content.slice(0, 300)}`);
+      _job.scores[rowIndex] = { status: 'error', error: 'Model returned an unparseable response' };
+      return;
+    }
+    const score = Math.max(1, Math.min(10, Math.round(parsed.score)));
+    _job.scores[rowIndex] = {
+      status: 'done', score,
+      explanation: String(parsed.explanation || '').trim(),
+      model: HF_MODEL,
+    };
+    console.log(`[score] row=${rowIndex} score=${score}`);
+  } catch (e) {
+    console.log(`[score] row=${rowIndex} error:`, e.message);
+    if (jobRef === _job) _job.scores[rowIndex] = { status: 'error', error: e.message };
   }
 }
 
@@ -178,15 +260,20 @@ app.post('/api/list-inboxes', async (req, res) => {
 app.post('/api/queue-import', (req, res) => {
   if (_job.status === 'running') return res.status(409).json({ ok: false, error: 'Import already running.' });
 
-  const { token, inbox_id, payloads, expectedInboxes } = req.body;
+  const { token, inbox_id, payloads, expectedInboxes, humanDrafts } = req.body;
   if (!token || !inbox_id || !Array.isArray(payloads) || !payloads.length)
     return res.status(400).json({ ok: false, error: 'Missing token, inbox_id, or payloads.' });
+
+  const rowContext = {};
+  for (const { payload, rowIndex } of payloads) {
+    rowContext[rowIndex] = { subject: payload?.subject || '', body: payload?.body || '' };
+  }
 
   _job = {
     status: 'running', total: payloads.length, processed: 0,
     results: {}, phase: 'importing', pauseRemaining: 0,
     convLookup: {}, expectedInboxes: expectedInboxes || {}, webhookResults: {},
-    drafts: {}, token,
+    drafts: {}, humanDrafts: humanDrafts || {}, rowContext, scores: {}, token,
   };
   _pendingWebhooks = [];
   _pendingComments = [];
@@ -205,8 +292,9 @@ app.post('/api/queue-import', (req, res) => {
             _job.results[rowIndex] = { ok: true, msg: 'Imported', uid };
             _job.debugImport = { rowIndex, status: r.status, uid, data: r.data };
             if (uid) {
+              const jobRef = _job;
               fetchConversationId(uid, token).then(cid => {
-                if (cid) {
+                if (cid && jobRef === _job && _job.results[rowIndex]) {
                   _job.convLookup[cid] = rowIndex;
                   _job.results[rowIndex].conv_id = cid;
                   flushPendingWebhooks(); // apply any webhooks that arrived early
@@ -249,6 +337,7 @@ app.get('/api/import-status', (_req, res) => {
     status: _job.status, total: _job.total, processed: _job.processed,
     phase: _job.phase, pause_remaining: _job.pauseRemaining,
     results: _job.results, webhookResults: _job.webhookResults, drafts: _job.drafts,
+    scores: _job.scores,
     convLookup: _job.convLookup, debugLookup: _job.debugLookup || null,
     debugImport: _job.debugImport || null, debugWebhook: _job.debugWebhook || null,
   });
@@ -294,7 +383,8 @@ app.post('/webhook', (req, res) => {
 app.post('/api/reset', (_req, res) => {
   _job = {
     status: 'idle', total: 0, processed: 0, results: {}, phase: '', pauseRemaining: 0,
-    convLookup: {}, expectedInboxes: {}, webhookResults: {}, drafts: {}, token: null,
+    convLookup: {}, expectedInboxes: {}, webhookResults: {}, drafts: {},
+    humanDrafts: {}, rowContext: {}, scores: {}, token: null,
   };
   _pendingWebhooks = [];
   _pendingComments = [];
