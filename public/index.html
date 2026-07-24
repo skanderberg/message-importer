@@ -1114,9 +1114,12 @@ async function pollStatus() {
       tt.className = 'time-tag';
     }
 
-    // Scroll latest success into view
-    const lastOk = Object.entries(results||{}).filter(([,r])=>r.ok).map(([i])=>parseInt(i)).sort((a,b)=>b-a)[0];
-    if (lastOk !== undefined) document.getElementById(`tr-${lastOk}`)?.scrollIntoView({block:'nearest',behavior:'smooth'});
+    // Scroll latest success into view — but only while the import is still running,
+    // so post-import polling (webhooks, drafts, scores) never fights the user's scrolling
+    if (status === 'running') {
+      const lastOk = Object.entries(results||{}).filter(([,r])=>r.ok).map(([i])=>parseInt(i)).sort((a,b)=>b-a)[0];
+      if (lastOk !== undefined) document.getElementById(`tr-${lastOk}`)?.scrollIntoView({block:'nearest',behavior:'smooth'});
+    }
 
     if (status === 'done') {
       // Show done state immediately
