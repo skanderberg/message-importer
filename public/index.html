@@ -235,14 +235,24 @@
     .col-autopilot  { width: 260px; flex-shrink: 0; padding: 0 10px; }
 
     .col-score      { width: 280px; flex-shrink: 0; padding: 0 10px; }
+    .col-outbound   { width: 260px; flex-shrink: 0; padding: 0 10px; }
+    .row-outbound   { width: 260px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; color: var(--text-2); }
+    .row-outbound .hu-draft {
+      white-space: pre-wrap; word-break: break-word; line-height: 1.35;
+      background: #eef7f1; border: 1px solid #cdeeda; border-left: 3px solid #2aa15f;
+      border-radius: 6px; padding: 5px 8px; color: var(--text);
+    }
+    .row-outbound .hu-author { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .04em; color: #1a7f42; margin-bottom: 2px; }
 
     /* Hide inbox-testing columns when the file has no inbox / expected_inbox column */
     .no-inbox-cols .col-inbox-exp, .no-inbox-cols .row-inbox-exp,
     .no-inbox-cols .col-inbox-add, .no-inbox-cols .row-inbox-add,
     .no-inbox-cols .col-match,     .no-inbox-cols .row-match { display: none; }
 
-    /* Hide quality-score column when the file has no outbound column */
-    .no-score-col .col-score, .no-score-col .row-score { display: none; }
+    /* Hide quality-score + human-reply columns when the file has no outbound column */
+    .no-score-col .col-score,    .no-score-col .row-score,
+    .no-score-col .col-outbound, .no-score-col .row-outbound { display: none; }
 
     .msg-row {
       display: flex; align-items: center;
@@ -546,6 +556,7 @@
         <div class="col-inbox-add">Added Inbox</div>
         <div class="col-match">Match</div>
         <div class="col-autopilot">Autopilot Draft</div>
+        <div class="col-outbound">Human Reply (outbound)</div>
         <div class="col-score">Quality Score</div>
       </div>
       <div id="tBody"></div>
@@ -956,6 +967,7 @@ function renderList(statuses, fm, tm) {
     const st = statuses[i];
     const rowCls = st.ok ? '' : 'row-fail';
     const expInbox = esc(String(row.inbox || row.expected_inbox || row['expected inbox'] || ''));
+    const outboundTxt = esc(String(row.outbound || '').trim());
     return `<div class="msg-row ${rowCls}" id="tr-${i}">
       <div class="row-num">${i+1}</div>
       <div class="row-stat" id="st-${i}"><span class="badge b-queued">Queued</span></div>
@@ -968,6 +980,9 @@ function renderList(statuses, fm, tm) {
       <div class="row-inbox-add" id="add-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-match"     id="match-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-autopilot" id="draft-${i}"><span style="color:var(--text-3)">—</span></div>
+      <div class="row-outbound">${outboundTxt
+        ? `<div class="hu-draft" title="${outboundTxt}"><span class="hu-author">Human reply</span>${outboundTxt}</div>`
+        : '<span style="color:var(--text-3)">—</span>'}</div>
       <div class="row-score" id="score-${i}"><span style="color:var(--text-3)">—</span></div>
     </div>`;
   }).join('');
