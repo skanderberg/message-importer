@@ -76,24 +76,6 @@
     /* ── Shell ── */
     .shell { display: flex; flex: 1; overflow: hidden; }
 
-    /* ── Icon sidebar ── */
-    .icon-rail {
-      width: 48px; min-width: 48px;
-      background: var(--sidebar-bg);
-      display: flex; flex-direction: column; align-items: center;
-      padding: 10px 0; gap: 2px;
-      border-right: 1px solid rgba(255,255,255,.06);
-    }
-    .rail-icon {
-      width: 36px; height: 36px; border-radius: var(--radius);
-      display: flex; align-items: center; justify-content: center;
-      color: rgba(255,255,255,.4); font-size: 16px; cursor: pointer;
-      transition: background .15s, color .15s;
-    }
-    .rail-icon:hover { background: var(--sidebar-hover); color: rgba(255,255,255,.75); }
-    .rail-icon.active { background: var(--front-purple); color: white; }
-    .rail-sep { width: 22px; height: 1px; background: rgba(255,255,255,.08); margin: 6px 0; }
-
     /* ── Left config panel ── */
     .config-panel {
       width: 268px; min-width: 268px;
@@ -251,6 +233,11 @@
     .col-match      { width: 70px;  flex-shrink: 0; padding: 0 10px; }
     .col-autopilot  { width: 260px; flex-shrink: 0; padding: 0 10px; }
 
+    /* Hide inbox-testing columns when the file has no inbox / expected_inbox column */
+    .no-inbox-cols .col-inbox-exp, .no-inbox-cols .row-inbox-exp,
+    .no-inbox-cols .col-inbox-add, .no-inbox-cols .row-inbox-add,
+    .no-inbox-cols .col-match,     .no-inbox-cols .row-match { display: none; }
+
     .msg-row {
       display: flex; align-items: center;
       padding: 0 16px; min-height: 38px;
@@ -276,8 +263,7 @@
     .row-match     { width: 70px;  flex-shrink: 0; padding: 0 10px; }
     .row-autopilot { width: 260px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; color: var(--text-2); }
     .row-autopilot .ap-draft {
-      display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
-      overflow: hidden; line-height: 1.35;
+      white-space: pre-wrap; word-break: break-word; line-height: 1.35;
       background: #f4f0ff; border: 1px solid #e2d8ff; border-left: 3px solid var(--front-purple);
       border-radius: 6px; padding: 5px 8px; color: var(--text);
     }
@@ -359,18 +345,10 @@
   <span class="topbar-subtitle" style="margin-left:4px">/ Import tool</span>
   <div class="topbar-right">
     <span id="credPill" class="status-pill"><span class="dot"></span>Not connected</span>
-    <button class="btn btn-outline btn-sm" onclick="resetAll()">↺ New import</button>
   </div>
 </div>
 
 <div class="shell">
-
-  <!-- ── Icon rail ── -->
-  <div class="icon-rail">
-    <div class="rail-icon active" title="Import">📥</div>
-    <div class="rail-sep"></div>
-    <div class="rail-icon" title="Settings" style="margin-top:auto">⚙️</div>
-  </div>
 
   <!-- ── Config panel ── -->
   <div class="config-panel">
@@ -480,7 +458,7 @@
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin-bottom:3px">Required columns</div>
           <code style="font-size:11.5px;color:var(--front-purple)">subject &nbsp; body</code>
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin:7px 0 3px">Optional columns</div>
-          <code style="font-size:11.5px;color:var(--text-3)">from &nbsp; to &nbsp; inbox / expected inbox</code>
+          <code style="font-size:11.5px;color:var(--text-3)">from &nbsp; to &nbsp; inbox &nbsp; expected_inbox</code>
         </div>
         <div style="margin-top:8px;font-size:11.5px;color:var(--text-3);line-height:1.55">
           Rate limit: <strong style="color:var(--text-2)">50 msgs / min</strong>. Larger imports pause automatically between batches.
@@ -929,6 +907,11 @@ function showAlerts(items) {
 function renderList(statuses, fm, tm) {
   document.getElementById('emptyState').classList.add('hidden');
   document.getElementById('listHeader').classList.remove('hidden');
+
+  const hasInboxCol = rows.some(r =>
+    String(r.inbox || r.expected_inbox || r['expected inbox'] || '').trim() !== '');
+  document.getElementById('listHeader').classList.toggle('no-inbox-cols', !hasInboxCol);
+  document.getElementById('tBody').classList.toggle('no-inbox-cols', !hasInboxCol);
   document.getElementById('previewMeta').textContent = `${rows.length} row${rows.length!==1?'s':''}`;
 
   document.getElementById('tBody').innerHTML = rows.map((row, i) => {
