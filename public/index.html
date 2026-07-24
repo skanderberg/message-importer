@@ -606,6 +606,12 @@
           <span style="color:var(--red)">✗ Mismatched: <strong id="sMatchFail">0</strong></span>
           <span style="color:var(--text-3)">Pending: <strong id="sMatchPending">0</strong></span>
         </div>
+        <div id="scoreSummary" class="hidden" style="margin-top:10px;padding:12px 16px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;font-size:13px;display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+          <span>Draft quality: <strong>avg <span id="sScoreAvg">—</span></strong> · <strong>median <span id="sScoreMed">—</span></strong></span>
+          <span style="color:var(--text-2)">Range: <strong id="sScoreRange">—</strong></span>
+          <span style="color:var(--text-2)">Scored: <strong id="sScoreN">0</strong></span>
+          <span style="color:var(--text-3)">Pending: <strong id="sScorePending">0</strong></span>
+        </div>
       </div>
 
     </div>
@@ -1161,6 +1167,24 @@ async function pollStatus() {
         document.getElementById('sMatchPct').textContent     = pct !== null ? `${pct}%` : '—';
       }
 
+      // Update quality-score summary (avg / median), only when scoring is in play
+      const expected = Object.keys(_humanDrafts).length;
+      if (expected > 0) {
+        const scVals = Object.values(scores||{});
+        const doneScores = scVals.filter(s => s.status === 'done').map(s => s.score).sort((a,b)=>a-b);
+        const n = doneScores.length;
+        document.getElementById('scoreSummary').classList.remove('hidden');
+        document.getElementById('sScoreN').textContent = n;
+        document.getElementById('sScorePending').textContent = Math.max(0, expected - scVals.filter(s => s.status === 'done' || s.status === 'error').length);
+        if (n > 0) {
+          const avg = doneScores.reduce((a,b)=>a+b,0) / n;
+          const med = n % 2 ? doneScores[(n-1)/2] : (doneScores[n/2-1] + doneScores[n/2]) / 2;
+          document.getElementById('sScoreAvg').textContent = `${Math.round(avg*10)/10} / 10`;
+          document.getElementById('sScoreMed').textContent = `${Math.round(med*10)/10} / 10`;
+          document.getElementById('sScoreRange').textContent = `${doneScores[0]}–${doneScores[n-1]}`;
+        }
+      }
+
       // Keep polling to catch conv IDs, inbox webhooks, and Autopilot drafts.
       // Once imports + inbox webhooks settle, downshift to a slower cadence and
       // keep watching for comment-triggered drafts, up to a 5-minute cap.
@@ -1235,6 +1259,7 @@ async function redoImport() {
   if (!readyPayloads.length) return;
   document.getElementById('stateDone').classList.add('hidden');
   document.getElementById('matchSummary').classList.add('hidden');
+  document.getElementById('scoreSummary').classList.add('hidden');
   document.getElementById('redoBtn').style.display = 'none';
   _rowResults = {};
   await startImport();
