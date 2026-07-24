@@ -20,10 +20,12 @@ let _job = {
   status: 'idle', total: 0, processed: 0,
   results: {}, phase: '', pauseRemaining: 0,
   convLookup: {}, expectedInboxes: {}, webhookResults: {},
+  drafts: {}, token: null,
 };
 
 // Buffer webhooks that arrive before convLookup is populated
 let _pendingWebhooks = []; // [{ convId, inboxName }]
+let _pendingComments = []; // [{ convId }] — comment events awaiting convLookup
 
 function applyWebhook(convId, inboxName) {
   const rowIdx = _job.convLookup[convId];
@@ -37,6 +39,52 @@ function applyWebhook(convId, inboxName) {
 
 function flushPendingWebhooks() {
   _pendingWebhooks = _pendingWebhooks.filter(({ convId, inboxName }) => !applyWebhook(convId, inboxName));
+}
+
+// A comment on one of our conversations is the trigger to look for an Autopilot draft
+function applyCommentWebhook(convId) {
+  const rowIdx = _job.convLookup[convId];
+  if (rowIdx === undefined) return false;
+  fetchDrafts(convId, rowIdx, _job.token); // fire-and-forget
+  return true;
+}
+
+function flushPendingComments() {
+  _pendingComments = _pendingComments.filter(({ convId }) => !applyCommentWebhook(convId));
+}
+
+function stripHtml(html) {
+  if (!html) return '';
+  return String(html).replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// List drafts on a conversation and store the most recent one for its row.
+// Autopilot may create the draft moments after the comment fires, so retry a few times.
+async function fetchDrafts(convId, rowIndex, token) {
+  if (!token) return;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await sleep(3000);
+    try {
+      const r = await frontGet(`/conversations/${convId}/drafts`, token);
+      console.log(`[drafts] attempt=${attempt} conv=${convId} status=${r.status} count=${(r.data?._results||[]).length}`);
+      if (!r.ok) continue;
+      const drafts = r.data?._results || [];
+      if (!drafts.length) continue;
+      const latest = drafts.reduce((a, b) => ((b.created_at || 0) > (a.created_at || 0) ? b : a));
+      const author = latest.author
+        ? [latest.author.first_name, latest.author.last_name].filter(Boolean).join(' ') || latest.author.username || null
+        : null;
+      _job.drafts[rowIndex] = {
+        body:   latest.text || stripHtml(latest.body) || latest.blurb || '',
+        author,
+        count:  drafts.length,
+        at:     latest.created_at || null,
+      };
+      return;
+    } catch (e) {
+      console.log(`[drafts] attempt=${attempt} conv=${convId} error:`, e.message);
+    }
+  }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -138,8 +186,10 @@ app.post('/api/queue-import', (req, res) => {
     status: 'running', total: payloads.length, processed: 0,
     results: {}, phase: 'importing', pauseRemaining: 0,
     convLookup: {}, expectedInboxes: expectedInboxes || {}, webhookResults: {},
+    drafts: {}, token,
   };
   _pendingWebhooks = [];
+  _pendingComments = [];
 
   (async () => {
     const BATCH = 50, WIN = 60_000;
@@ -160,6 +210,7 @@ app.post('/api/queue-import', (req, res) => {
                   _job.convLookup[cid] = rowIndex;
                   _job.results[rowIndex].conv_id = cid;
                   flushPendingWebhooks(); // apply any webhooks that arrived early
+                  flushPendingComments(); // and any comment/draft triggers
                 }
               });
             }
@@ -197,7 +248,7 @@ app.get('/api/import-status', (_req, res) => {
   res.json({
     status: _job.status, total: _job.total, processed: _job.processed,
     phase: _job.phase, pause_remaining: _job.pauseRemaining,
-    results: _job.results, webhookResults: _job.webhookResults,
+    results: _job.results, webhookResults: _job.webhookResults, drafts: _job.drafts,
     convLookup: _job.convLookup, debugLookup: _job.debugLookup || null,
     debugImport: _job.debugImport || null, debugWebhook: _job.debugWebhook || null,
   });
@@ -212,12 +263,23 @@ app.post('/webhook', (req, res) => {
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const convId = body?.conversation?.id;
-    const inboxName = body?.target?.data?.[0]?.name || null;
-    console.log(`[webhook] convId=${convId} inboxName=${inboxName}`);
-    _job.debugWebhook = { convId, inboxName, rawSnippet: rawBody.slice(0, 500) };
+    const convId    = body?.conversation?.id;
+    const eventType = body?.type || body?.target?._meta?.type || null;
+    console.log(`[webhook] type=${eventType} convId=${convId}`);
 
-    if (!convId || !inboxName) return;
+    if (!convId) return;
+
+    // A comment OR tag added to one of our conversations → go look for an Autopilot draft
+    if (eventType === 'comment' || eventType === 'tag') {
+      _job.debugWebhook = { eventType, convId, rawSnippet: rawBody.slice(0, 500) };
+      if (!applyCommentWebhook(convId)) _pendingComments.push({ convId });
+      return;
+    }
+
+    // Otherwise treat it as the inbox-add event and record which inbox it landed in
+    const inboxName = body?.target?.data?.[0]?.name || null;
+    _job.debugWebhook = { eventType, convId, inboxName, rawSnippet: rawBody.slice(0, 500) };
+    if (!inboxName) return;
 
     if (!applyWebhook(convId, inboxName)) {
       _pendingWebhooks.push({ convId, inboxName });
@@ -232,8 +294,10 @@ app.post('/webhook', (req, res) => {
 app.post('/api/reset', (_req, res) => {
   _job = {
     status: 'idle', total: 0, processed: 0, results: {}, phase: '', pauseRemaining: 0,
-    convLookup: {}, expectedInboxes: {}, webhookResults: {},
+    convLookup: {}, expectedInboxes: {}, webhookResults: {}, drafts: {}, token: null,
   };
+  _pendingWebhooks = [];
+  _pendingComments = [];
   res.json({ ok: true });
 });
 

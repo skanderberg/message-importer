@@ -228,7 +228,7 @@
 
     /* ── Conversation-style list ── */
     .msg-list { flex: 1; overflow-y: auto; overflow-x: auto; }
-    .msg-list-header, #tBody .msg-row { min-width: 1220px; }
+    .msg-list-header, #tBody .msg-row { min-width: 1480px; }
 
     .msg-list-header {
       display: flex; align-items: center; padding: 0 16px;
@@ -249,6 +249,7 @@
     .col-inbox-exp  { width: 130px; flex-shrink: 0; padding: 0 10px; }
     .col-inbox-add  { width: 130px; flex-shrink: 0; padding: 0 10px; }
     .col-match      { width: 70px;  flex-shrink: 0; padding: 0 10px; }
+    .col-autopilot  { width: 260px; flex-shrink: 0; padding: 0 10px; }
 
     .msg-row {
       display: flex; align-items: center;
@@ -273,6 +274,15 @@
     .row-inbox-exp { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
     .row-inbox-add { width: 130px; flex-shrink: 0; padding: 0 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-size: 12px; }
     .row-match     { width: 70px;  flex-shrink: 0; padding: 0 10px; }
+    .row-autopilot { width: 260px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; color: var(--text-2); }
+    .row-autopilot .ap-draft {
+      display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden; line-height: 1.35;
+      background: #f4f0ff; border: 1px solid #e2d8ff; border-left: 3px solid var(--front-purple);
+      border-radius: 6px; padding: 5px 8px; color: var(--text);
+    }
+    .row-autopilot .ap-author { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--front-purple); margin-bottom: 2px; }
 
     /* Status badges — Front style */
     .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; white-space: nowrap; }
@@ -530,6 +540,7 @@
         <div class="col-inbox-exp">Expected Inbox</div>
         <div class="col-inbox-add">Added Inbox</div>
         <div class="col-match">Match</div>
+        <div class="col-autopilot">Autopilot Draft</div>
       </div>
       <div id="tBody"></div>
     </div>
@@ -601,7 +612,7 @@ const post      = (url, body) => fetch(url, { method:'POST', headers:{'Content-T
 // ═══════════════════════════════════════
 // State
 // ═══════════════════════════════════════
-let rows = [], readyPayloads = [], _rowResults = {}, _pollTimer = null, _importStart = null;
+let rows = [], readyPayloads = [], _rowResults = {}, _pollTimer = null, _importStart = null, _slowPoll = false;
 let _expectedInboxes = {}; // rowIndex → inbox name from file
 
 // ═══════════════════════════════════════
@@ -935,6 +946,7 @@ function renderList(statuses, fm, tm) {
       <div class="row-inbox-exp" id="exp-${i}" title="${expInbox}">${expInbox||'<span style="color:var(--text-3)">—</span>'}</div>
       <div class="row-inbox-add" id="add-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-match"     id="match-${i}"><span style="color:var(--text-3)">—</span></div>
+      <div class="row-autopilot" id="draft-${i}"><span style="color:var(--text-3)">—</span></div>
     </div>`;
   }).join('');
 }
@@ -982,7 +994,9 @@ async function startImport() {
 
   document.getElementById('stateIdle').classList.add('hidden');
   document.getElementById('stateRunning').classList.remove('hidden');
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   _importStart = Date.now();
+  _slowPoll = false;
 
   readyPayloads.forEach(({rowIndex}) => setRowStatus(rowIndex, 'loading', '↑ Importing…'));
 
@@ -1000,7 +1014,7 @@ async function startImport() {
 async function pollStatus() {
   try {
     const d = await fetch('/api/import-status').then(r=>r.json());
-    const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup } = d;
+    const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup, drafts } = d;
 
     for (const [idx, r] of Object.entries(results||{})) {
       const convId = r.conv_id || (convLookup||{})[idx]?.conversationId;
@@ -1028,6 +1042,17 @@ async function pollStatus() {
           matchEl.innerHTML = '<span class="badge b-fail">✗ No</span>';
         }
       }
+    }
+
+    for (const [idx, dr] of Object.entries(drafts||{})) {
+      const el = document.getElementById(`draft-${idx}`);
+      if (!el || !dr) continue;
+      const body = (dr.body || '').trim();
+      if (!body) continue;
+      const author = dr.author ? `Autopilot · ${dr.author}` : 'Autopilot draft';
+      el.innerHTML =
+        `<div class="ap-draft" title="${esc(body)}"><span class="ap-author">${esc(author)}</span>${esc(body)}</div>`;
+      if (_rowResults[idx]) _rowResults[idx].draft = body; else _rowResults[idx] = { draft: body };
     }
 
     const pct = total ? Math.round((processed/total)*100) : 0;
@@ -1081,14 +1106,19 @@ async function pollStatus() {
         document.getElementById('sMatchPct').textContent     = pct !== null ? `${pct}%` : '—';
       }
 
-      // Keep polling until all successful rows have a conv ID (up to 2 min)
+      // Keep polling to catch conv IDs, inbox webhooks, and Autopilot drafts.
+      // Once imports + inbox webhooks settle, downshift to a slower cadence and
+      // keep watching for comment-triggered drafts, up to a 5-minute cap.
       const successCount = ok;
       const convCount    = Object.keys(convLookup||{}).length;
       const wh           = whVals.length;
-      if (convCount >= successCount && wh >= successCount) {
+      const elapsed      = _importStart ? Date.now() - _importStart : Infinity;
+      if (elapsed > 300_000) {
         clearInterval(_pollTimer); _pollTimer = null;
-      } else if (!_importStart || (Date.now() - _importStart) > 120_000) {
-        clearInterval(_pollTimer); _pollTimer = null;
+      } else if (convCount >= successCount && wh >= successCount && !_slowPoll) {
+        _slowPoll = true;
+        clearInterval(_pollTimer);
+        _pollTimer = setInterval(pollStatus, 5000);
       }
     }
   } catch {}
@@ -1104,11 +1134,12 @@ function fmtTime(s) {
 // ═══════════════════════════════════════
 function downloadCSV() {
   const cell = v => { const s=String(v??''); return s.includes(',')||s.includes('"')||s.includes('\n')?`"${s.replace(/"/g,'""')}"`:s; };
-  const lines = [['row','subject','body','from','to','status'].join(',')];
+  const lines = [['row','subject','body','from','to','status','autopilot_draft'].join(',')];
   rows.forEach((row, i) => {
     const r = _rowResults[i]||{};
     lines.push([i+1,cell(row.subject),cell(row.body),cell(row.from||''),cell(row.to||''),
-                cell(r.importOk===true?'imported':r.importOk===false?'failed':'skipped')].join(','));
+                cell(r.importOk===true?'imported':r.importOk===false?'failed':'skipped'),
+                cell(r.draft||'')].join(','));
   });
   const a = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(new Blob([lines.join('\n')],{type:'text/csv'})),
