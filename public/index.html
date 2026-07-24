@@ -555,8 +555,8 @@
         <div class="col-inbox-exp">Expected Inbox</div>
         <div class="col-inbox-add">Added Inbox</div>
         <div class="col-match">Match</div>
-        <div class="col-autopilot">Autopilot Draft</div>
         <div class="col-outbound">Human Reply (outbound)</div>
+        <div class="col-autopilot">Autopilot Draft</div>
         <div class="col-score">Quality Score</div>
       </div>
       <div id="tBody"></div>
@@ -985,10 +985,10 @@ function renderList(statuses, fm, tm) {
       <div class="row-inbox-exp" id="exp-${i}" title="${expInbox}">${expInbox||'<span style="color:var(--text-3)">—</span>'}</div>
       <div class="row-inbox-add" id="add-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-match"     id="match-${i}"><span style="color:var(--text-3)">—</span></div>
-      <div class="row-autopilot" id="draft-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-outbound">${outboundTxt
         ? `<div class="hu-draft" title="${outboundTxt}"><span class="hu-author">Human reply</span>${outboundTxt}</div>`
         : '<span style="color:var(--text-3)">—</span>'}</div>
+      <div class="row-autopilot" id="draft-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-score" id="score-${i}"><span style="color:var(--text-3)">—</span></div>
     </div>`;
   }).join('');
