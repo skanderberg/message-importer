@@ -739,6 +739,7 @@ async function validateCreds() {
     const d = await post('/api/validate', { token });
     if (d.ok) {
       _token = token;
+      try { localStorage.setItem('front_token', token); } catch (_) {}
       setConnected(d.data);
       loadInboxes();
     } else {
@@ -758,6 +759,7 @@ function setConnected(data) {
 
 function disconnect() {
   _token = ''; _selectedInbox = null; _allInboxes = [];
+  try { localStorage.removeItem('front_token'); } catch (_) {}
   document.getElementById('connectedBadge').classList.add('hidden');
   document.getElementById('tokenFields').classList.remove('hidden');
   document.getElementById('inboxWrap').classList.add('hidden');
@@ -1500,6 +1502,15 @@ document.getElementById('inboxList').addEventListener('click', e => {
 
 // Init
 onModeChange();
+
+// Auto-reconnect with the saved token (stored in this browser after a successful connect)
+try {
+  const savedToken = localStorage.getItem('front_token');
+  if (savedToken) {
+    document.getElementById('apiToken').value = savedToken;
+    validateCreds();
+  }
+} catch (_) {}
 </script>
 </body>
 </html>
