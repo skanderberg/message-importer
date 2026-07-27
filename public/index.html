@@ -1384,7 +1384,8 @@ async function pollStatus() {
       const mismatched = whVals.filter(w => w.match === false).length;
       const pending   = ok - whVals.length;
       const pct = whVals.length > 0 ? Math.round(matched / whVals.length * 100) : null;
-      if (whVals.length > 0 || ok > 0) {
+      // Only show the inbox-match summary when the file actually has expected inboxes to match against
+      if (Object.keys(_expectedInboxes).length > 0 && (whVals.length > 0 || ok > 0)) {
         document.getElementById('matchSummary').classList.remove('hidden');
         document.getElementById('sMatchOk').textContent      = matched;
         document.getElementById('sMatchFail').textContent    = mismatched;
