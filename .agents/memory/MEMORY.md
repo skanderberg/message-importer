@@ -1,1 +1,2 @@
 - [Draft quality scoring](draft-scoring.md) — HF router (OpenAI-compatible) + Llama 3.3 scores Autopilot drafts vs `outbound` column; async job writers must guard against job resets.
+- [Multi-turn simulation](multi-turn-simulation.md) — `body 2`/`outbound 2` columns trigger a customer-simulator loop; webhook re-triggers aren't guaranteed, so waiting rows need a watchdog re-check.

@@ -21,6 +21,7 @@ let _job = {
   results: {}, phase: '', pauseRemaining: 0,
   convLookup: {}, expectedInboxes: {}, webhookResults: {},
   drafts: {}, humanDrafts: {}, rowContext: {}, scores: {}, token: null,
+  turns: {}, turnState: {}, inboxId: null,
 };
 
 // Buffer webhooks that arrive before convLookup is populated
@@ -77,17 +78,264 @@ async function fetchDrafts(convId, rowIndex, token) {
       const author = latest.author
         ? [latest.author.first_name, latest.author.last_name].filter(Boolean).join(' ') || latest.author.username || null
         : null;
-      _job.drafts[rowIndex] = {
-        body:   latest.text || stripHtml(latest.body) || latest.blurb || '',
-        author,
-        count:  drafts.length,
-        at:     latest.created_at || null,
-      };
+      const draftBody = latest.text || stripHtml(latest.body) || latest.blurb || '';
+      const st = _job.turnState[rowIndex];
+
+      if (st) {
+        // Multi-turn: only advance when we're actually waiting on Autopilot for this turn,
+        // and only on a draft newer than the last one we processed. Late revisions of an
+        // already-consumed draft arriving while simulating/evaluating are ignored.
+        if (st.busy || st.phase !== 'waiting') return;
+        const lastMsg = st.transcript[st.transcript.length - 1];
+        if (lastMsg && lastMsg.role !== 'customer') return; // not expecting an Autopilot reply right now
+        const lastAp = [...st.transcript].reverse().find(m => m.role === 'autopilot');
+        const isNew = (latest.created_at || 0) > (st.lastDraftAt || 0) ||
+                      (!latest.created_at && (!lastAp || lastAp.text !== draftBody));
+        if (!isNew) continue; // keep retrying — Autopilot may not have drafted the new turn yet
+        st.busy = true;
+        st.lastDraftAt = latest.created_at || (st.lastDraftAt || 0) + 1;
+        st.transcript.push({ role: 'autopilot', text: draftBody, author, at: latest.created_at || null });
+        _job.drafts[rowIndex] = { body: draftBody, author, count: drafts.length, at: latest.created_at || null };
+        try {
+          await advanceConversation(rowIndex, convId, token);
+        } finally {
+          if (jobRef === _job && _job.turnState[rowIndex]) _job.turnState[rowIndex].busy = false;
+        }
+        return;
+      }
+
+      _job.drafts[rowIndex] = { body: draftBody, author, count: drafts.length, at: latest.created_at || null };
       scoreDraft(rowIndex); // fire-and-forget quality scoring vs. human draft
       return;
     } catch (e) {
       console.log(`[drafts] attempt=${attempt} conv=${convId} error:`, e.message);
     }
+  }
+}
+
+// ─── Multi-turn simulation engine ─────────────────────────────────────────────
+// After each non-final Autopilot draft, generate the customer's next message
+// (guided by the scripted example) and import it into the same conversation.
+// After the final draft, evaluate the whole back-and-forth against the example.
+
+// Watchdog: webhooks are the primary trigger for fetchDrafts, but if Front never
+// sends a second comment/tag event (or the draft appears after the retry window),
+// this keeps re-checking waiting multi-turn rows so the loop can't deadlock.
+async function watchTurnRow(rowIndex, convId, token) {
+  const jobRef = _job;
+  const deadline = Date.now() + 10 * 60_000; // 10-minute cap per row
+  while (Date.now() < deadline) {
+    await sleep(20_000);
+    if (jobRef !== _job) return;
+    const st = _job.turnState[rowIndex];
+    if (!st || st.phase === 'done' || st.phase === 'error') return;
+    if (st.phase === 'waiting' && !st.busy) {
+      console.log(`[watchdog] row=${rowIndex} re-checking drafts (turn ${st.turnIndex + 1})`);
+      await fetchDrafts(convId, rowIndex, token);
+    }
+  }
+  const st = jobRef === _job ? _job.turnState[rowIndex] : null;
+  if (st && st.phase !== 'done' && st.phase !== 'error') {
+    st.phase = 'error';
+    st.error = 'Timed out waiting for Autopilot';
+  }
+}
+
+function exampleScript(rowIndex) {
+  const turns = _job.turns[rowIndex] || [];
+  const lines = [];
+  turns.forEach((t, i) => {
+    lines.push(`CUSTOMER (message ${i + 1}):\n${t.inbound || '(none)'}`);
+    if (t.human) lines.push(`SUPPORT AGENT (reply ${i + 1}):\n${t.human}`);
+  });
+  return lines.join('\n\n');
+}
+
+function transcriptText(rowIndex) {
+  const st = _job.turnState[rowIndex];
+  return (st?.transcript || [])
+    .map(m => `${m.role === 'customer' ? 'CUSTOMER' : 'AUTOPILOT (support agent)'}:\n${m.text}`)
+    .join('\n\n');
+}
+
+async function advanceConversation(rowIndex, convId, token) {
+  const st    = _job.turnState[rowIndex];
+  const turns = _job.turns[rowIndex] || [];
+  if (!st) return;
+  const jobRef = _job;
+
+  const isLastTurn = st.turnIndex >= turns.length - 1;
+  if (isLastTurn) {
+    st.phase = 'evaluating';
+    await scoreConversation(rowIndex);
+    if (jobRef === _job && _job.turnState[rowIndex]) _job.turnState[rowIndex].phase = 'done';
+    return;
+  }
+
+  // Simulate the customer's next message
+  st.phase = 'simulating';
+  const nextTurn = turns[st.turnIndex + 1];
+  let customerMsg = null;
+  try {
+    customerMsg = await simulateCustomerReply(rowIndex, nextTurn);
+  } catch (e) {
+    console.log(`[simulate] row=${rowIndex} error:`, e.message);
+  }
+  if (jobRef !== _job) return;
+  if (!customerMsg) customerMsg = nextTurn.inbound; // fall back to the scripted message verbatim
+
+  // Import the simulated customer reply into the same conversation (same thread_ref)
+  const ctx = _job.rowContext[rowIndex] || {};
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    sender:      ctx.sender || { handle: 'customer@example.com' },
+    to:          ctx.to || [],
+    subject:     `Re: ${ctx.subject || ''}`.trim(),
+    body:        customerMsg,
+    body_format: 'html',
+    type:        'email',
+    external_id: `${ctx.threadRef || convId}_turn${st.turnIndex + 2}_${now}`,
+    created_at:  now,
+    metadata:    { thread_ref: ctx.threadRef || convId, is_inbound: true, is_archived: false, should_skip_rules: false },
+  };
+  try {
+    const r = await frontPost(`/inboxes/${_job.inboxId}/imported_messages`, token, payload);
+    console.log(`[simulate] row=${rowIndex} turn=${st.turnIndex + 2} import status=${r.status}`);
+    if (jobRef !== _job) return;
+    if (!r.ok) {
+      st.phase = 'error';
+      st.error = `Failed to send simulated reply: ${errMsg(r.data) || `HTTP ${r.status}`}`;
+      return;
+    }
+    st.transcript.push({ role: 'customer', text: customerMsg, simulated: true, at: now });
+    st.turnIndex += 1;
+    st.phase = 'waiting'; // now waiting for Autopilot's next draft (comment webhook re-triggers fetchDrafts)
+  } catch (e) {
+    if (jobRef === _job) { st.phase = 'error'; st.error = e.message; }
+  }
+}
+
+async function simulateCustomerReply(rowIndex, nextTurn) {
+  if (!process.env.OPENAI_API_KEY) return null;
+  const script = exampleScript(rowIndex);
+  const convo  = transcriptText(rowIndex);
+
+  const prompt = `You are simulating a CUSTOMER in a support email conversation, for testing an AI support agent ("Autopilot").
+
+Below is the SCRIPTED EXAMPLE conversation you must follow as closely as possible:
+
+=== SCRIPTED EXAMPLE ===
+${script}
+=== END EXAMPLE ===
+
+Here is the ACTUAL conversation so far (the support agent's replies may differ from the script):
+
+=== ACTUAL CONVERSATION ===
+${convo}
+=== END ACTUAL ===
+
+Your next message in the script is:
+=== SCRIPTED NEXT CUSTOMER MESSAGE ===
+${nextTurn.inbound}
+=== END ===
+
+Write the customer's next email reply. Rules:
+- Stick as closely as possible to the scripted next message — same information, same intent, same tone. If it fits the actual conversation, use it nearly verbatim.
+- If the support agent went off script (asked something different, gave wrong info, or skipped a step), adapt minimally so your reply makes sense, while steering the conversation back toward the script (e.g. still provide the scripted details like order IDs).
+- Never break character, never mention the script, the test, or that you are an AI.
+- Respond with ONLY the customer's email body text, no JSON, no commentary.`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: SCORING_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+      max_tokens: 600,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    console.log(`[simulate] row=${rowIndex} API error: ${JSON.stringify(data?.error?.message || data).slice(0, 200)}`);
+    return null;
+  }
+  const text = (data?.choices?.[0]?.message?.content || '').trim();
+  return text || null;
+}
+
+// Evaluate the entire multi-turn exchange against the scripted example
+async function scoreConversation(rowIndex) {
+  if (_job.scores[rowIndex]?.status === 'pending' || _job.scores[rowIndex]?.status === 'done') return;
+  if (!process.env.OPENAI_API_KEY) {
+    _job.scores[rowIndex] = { status: 'error', error: 'OPENAI_API_KEY not configured' };
+    return;
+  }
+  _job.scores[rowIndex] = { status: 'pending' };
+  const jobRef = _job;
+  const script = exampleScript(rowIndex);
+  const convo  = transcriptText(rowIndex);
+  const ctx    = _job.rowContext[rowIndex] || {};
+
+  const prompt = `You are evaluating an AI support agent ("Autopilot") over a full multi-turn email conversation, against a scripted example conversation showing how a human agent handled the same exchange.
+
+Subject: ${ctx.subject || '(none)'}
+
+=== SCRIPTED EXAMPLE (reference standard) ===
+${script}
+=== END EXAMPLE ===
+
+=== ACTUAL CONVERSATION (AI agent's replies to evaluate) ===
+${convo}
+=== END ACTUAL ===
+
+Grade the AI agent's replies ACROSS THE WHOLE CONVERSATION against the example, in three categories, each scored 1-5 (integer):
+- tone: professionalism, empathy, and voice compared to the example replies
+- content: does each reply cover the same points and stay factually consistent with the example; penalize missing steps/commitments, wrong info, or failing to progress the conversation like the example does
+- formatting: structure, length, greeting/sign-off, readability compared to the example replies
+
+Respond with ONLY a JSON object, no other text:
+{"tone": <1-5>, "content": <1-5>, "formatting": <1-5>, "explanation": "<concise explanation (2-3 sentences) of how the AI's handling of the full exchange compares to the example>"}`;
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: SCORING_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: 700,
+        response_format: { type: 'json_object' },
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (jobRef !== _job) return;
+    if (!res.ok) {
+      const msg = data?.error?.message || data?.error || `HTTP ${res.status}`;
+      _job.scores[rowIndex] = { status: 'error', error: String(typeof msg === 'string' ? msg : JSON.stringify(msg)).slice(0, 200) };
+      return;
+    }
+    const content = data?.choices?.[0]?.message?.content || '';
+    let parsed = null;
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (jsonMatch) { try { parsed = JSON.parse(jsonMatch[0]); } catch (_) {} }
+    if (!parsed || typeof parsed.tone !== 'number' || typeof parsed.content !== 'number' || typeof parsed.formatting !== 'number') {
+      _job.scores[rowIndex] = { status: 'error', error: 'Model returned an unparseable response' };
+      return;
+    }
+    const clamp5 = v => Math.max(1, Math.min(5, Math.round(v)));
+    const tone = clamp5(parsed.tone), cont = clamp5(parsed.content), fmt = clamp5(parsed.formatting);
+    const overall = Math.round((tone + cont + fmt) / 3 * 10) / 10;
+    _job.scores[rowIndex] = {
+      status: 'done', multiTurn: true,
+      tone, content: cont, formatting: fmt, score: overall,
+      explanation: String(parsed.explanation || '').trim(),
+      model: SCORING_MODEL,
+    };
+    console.log(`[score-conv] row=${rowIndex} tone=${tone} content=${cont} formatting=${fmt} overall=${overall}`);
+  } catch (e) {
+    if (jobRef === _job) _job.scores[rowIndex] = { status: 'error', error: e.message };
   }
 }
 
@@ -267,13 +515,33 @@ app.post('/api/list-inboxes', async (req, res) => {
 app.post('/api/queue-import', (req, res) => {
   if (_job.status === 'running') return res.status(409).json({ ok: false, error: 'Import already running.' });
 
-  const { token, inbox_id, payloads, expectedInboxes, humanDrafts } = req.body;
+  const { token, inbox_id, payloads, expectedInboxes, humanDrafts, turns } = req.body;
   if (!token || !inbox_id || !Array.isArray(payloads) || !payloads.length)
     return res.status(400).json({ ok: false, error: 'Missing token, inbox_id, or payloads.' });
 
   const rowContext = {};
   for (const { payload, rowIndex } of payloads) {
-    rowContext[rowIndex] = { subject: payload?.subject || '', body: payload?.body || '' };
+    rowContext[rowIndex] = {
+      subject:   payload?.subject || '',
+      body:      payload?.body || '',
+      sender:    payload?.sender || null,
+      to:        payload?.to || [],
+      threadRef: payload?.metadata?.thread_ref || payload?.external_id || null,
+    };
+  }
+
+  // Multi-turn rows (2+ scripted turns) get a turn state machine for simulation.
+  // Only rows that are actually being imported get one.
+  const cleanTurns = {}, turnState = {};
+  for (const [idx, t] of Object.entries(turns || {})) {
+    if (!rowContext[idx]) continue; // row was skipped client-side, never imported
+    if (Array.isArray(t) && t.length > 1) {
+      cleanTurns[idx] = t;
+      turnState[idx] = {
+        turnIndex: 0, phase: 'waiting', lastDraftAt: 0, busy: false,
+        transcript: [{ role: 'customer', text: t[0].inbound || rowContext[idx]?.body || '', at: Math.floor(Date.now() / 1000) }],
+      };
+    }
   }
 
   _job = {
@@ -281,6 +549,7 @@ app.post('/api/queue-import', (req, res) => {
     results: {}, phase: 'importing', pauseRemaining: 0,
     convLookup: {}, expectedInboxes: expectedInboxes || {}, webhookResults: {},
     drafts: {}, humanDrafts: humanDrafts || {}, rowContext, scores: {}, token,
+    turns: cleanTurns, turnState, inboxId: inbox_id,
   };
   _pendingWebhooks = [];
   _pendingComments = [];
@@ -306,6 +575,7 @@ app.post('/api/queue-import', (req, res) => {
                   _job.results[rowIndex].conv_id = cid;
                   flushPendingWebhooks(); // apply any webhooks that arrived early
                   flushPendingComments(); // and any comment/draft triggers
+                  if (_job.turnState[rowIndex]) watchTurnRow(rowIndex, cid, token); // multi-turn deadlock guard
                 }
               });
             }
@@ -345,6 +615,10 @@ app.get('/api/import-status', (_req, res) => {
     phase: _job.phase, pause_remaining: _job.pauseRemaining,
     results: _job.results, webhookResults: _job.webhookResults, drafts: _job.drafts,
     scores: _job.scores,
+    turnState: Object.fromEntries(Object.entries(_job.turnState || {}).map(([i, s]) => [i, {
+      turnIndex: s.turnIndex, phase: s.phase, error: s.error || null,
+      totalTurns: (_job.turns[i] || []).length, transcript: s.transcript,
+    }])),
     convLookup: _job.convLookup, debugLookup: _job.debugLookup || null,
     debugImport: _job.debugImport || null, debugWebhook: _job.debugWebhook || null,
   });
@@ -392,6 +666,7 @@ app.post('/api/reset', (_req, res) => {
     status: 'idle', total: 0, processed: 0, results: {}, phase: '', pauseRemaining: 0,
     convLookup: {}, expectedInboxes: {}, webhookResults: {}, drafts: {},
     humanDrafts: {}, rowContext: {}, scores: {}, token: null,
+    turns: {}, turnState: {}, inboxId: null,
   };
   _pendingWebhooks = [];
   _pendingComments = [];

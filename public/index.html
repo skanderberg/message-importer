@@ -285,6 +285,18 @@
     }
     .row-autopilot .ap-author { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: .04em; color: var(--front-purple); margin-bottom: 2px; }
+    .row-autopilot .ap-draft + .ap-draft, .row-autopilot .cu-msg + .ap-draft,
+    .row-autopilot .ap-draft + .cu-msg { margin-top: 5px; }
+    .row-autopilot .cu-msg {
+      white-space: pre-wrap; word-break: break-word; line-height: 1.35;
+      background: #f6f7fa; border: 1px solid var(--border-2); border-left: 3px solid #9aa3b2;
+      border-radius: 6px; padding: 5px 8px; color: var(--text);
+    }
+    .row-autopilot .cu-author { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .04em; color: #5b6472; margin-bottom: 2px; }
+    .row-outbound .hu-draft + .hu-draft { margin-top: 5px; }
+    .turn-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 9px;
+      background: #eef1f6; color: #5b6472; margin-bottom: 4px; }
 
     .row-score { width: 280px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; color: var(--text-2); }
     .row-score .score-card {
@@ -641,6 +653,7 @@ const post      = (url, body) => fetch(url, { method:'POST', headers:{'Content-T
 let rows = [], readyPayloads = [], _rowResults = {}, _pollTimer = null, _importStart = null, _slowPoll = false;
 let _expectedInboxes = {}; // rowIndex → inbox name from file
 let _humanDrafts = {};     // rowIndex → human reply from 'outbound' column
+let _turns = {};           // rowIndex → [{inbound, human}] for multi-turn rows (2+ turns)
 
 // ═══════════════════════════════════════
 // Collapsible sections
@@ -898,6 +911,7 @@ function processRows(parseWarns = []) {
   readyPayloads = [];
   _expectedInboxes = {};
   _humanDrafts = {};
+  _turns = {};
   const statuses = [];
   const rowWarns = [];
 
@@ -906,6 +920,16 @@ function processRows(parseWarns = []) {
     if (inboxVal) _expectedInboxes[i] = inboxVal;
     const outboundVal = String(row.outbound || '').trim();
     if (outboundVal) _humanDrafts[i] = outboundVal;
+
+    // Multi-turn: collect body 2 / outbound 2, body 3 / outbound 3, …
+    const turns = [{ inbound: String(row.body || '').trim(), human: outboundVal }];
+    for (let k = 2; ; k++) {
+      const inb = String(row[`body_${k}`] || '').trim();
+      const out = String(row[`outbound_${k}`] || '').trim();
+      if (!inb) break;
+      turns.push({ inbound: inb, human: out });
+    }
+    if (turns.length > 1) _turns[i] = turns;
     const issues = [];
     if (fm==='file' && !String(row.from||'').trim()) issues.push('empty from');
     if (tm==='file' && !String(row.to  ||'').trim()) issues.push('empty to');
@@ -927,6 +951,7 @@ function processRows(parseWarns = []) {
     };
 
     if (issues.length) {
+      delete _turns[i]; // skipped rows never get imported, so never simulate them
       rowWarns.push({t:'warn', m:`Row ${i+2}: ${issues.join(', ')}`});
       statuses.push({ok:false, msg:issues.join(', '), from:fromHandle, to:toHandle});
     } else {
@@ -988,10 +1013,16 @@ function renderList(statuses, fm, tm) {
       <div class="row-inbox-exp" id="exp-${i}" title="${expInbox}">${expInbox||'<span style="color:var(--text-3)">—</span>'}</div>
       <div class="row-inbox-add" id="add-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-match"     id="match-${i}"><span style="color:var(--text-3)">—</span></div>
-      <div class="row-outbound">${outboundTxt
-        ? `<div class="hu-draft" title="${outboundTxt}"><span class="hu-author">Human reply</span>${outboundTxt}</div>`
+      <div class="row-outbound">${_turns[i]
+        ? _turns[i].map((t, k) => t.human
+            ? `<div class="hu-draft" title="${esc(t.human)}"><span class="hu-author">Human reply ${k+1} of ${_turns[i].length}</span>${esc(t.human)}</div>`
+            : '').join('')
+        : (outboundTxt
+            ? `<div class="hu-draft" title="${outboundTxt}"><span class="hu-author">Human reply</span>${outboundTxt}</div>`
+            : '<span style="color:var(--text-3)">—</span>')}</div>
+      <div class="row-autopilot" id="draft-${i}">${_turns[i]
+        ? `<span class="turn-badge">Multi-turn · ${_turns[i].length} turns</span><br><span style="color:var(--text-3)">—</span>`
         : '<span style="color:var(--text-3)">—</span>'}</div>
-      <div class="row-autopilot" id="draft-${i}"><span style="color:var(--text-3)">—</span></div>
       <div class="row-score" id="score-${i}"><span style="color:var(--text-3)">—</span></div>
     </div>`;
   }).join('');
@@ -1046,7 +1077,7 @@ async function startImport() {
 
   readyPayloads.forEach(({rowIndex}) => setRowStatus(rowIndex, 'loading', '↑ Importing…'));
 
-  const res = await post('/api/queue-import', { token: _token, inbox_id: inboxId, payloads: readyPayloads, expectedInboxes: _expectedInboxes, humanDrafts: _humanDrafts });
+  const res = await post('/api/queue-import', { token: _token, inbox_id: inboxId, payloads: readyPayloads, expectedInboxes: _expectedInboxes, humanDrafts: _humanDrafts, turns: _turns });
   if (!res.ok) {
     alert(res.error || 'Failed to start import.');
     document.getElementById('stateIdle').classList.remove('hidden');
@@ -1060,7 +1091,7 @@ async function startImport() {
 async function pollStatus() {
   try {
     const d = await fetch('/api/import-status').then(r=>r.json());
-    const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup, drafts, scores } = d;
+    const { status, total, processed, phase, pause_remaining, results, webhookResults, convLookup, drafts, scores, turnState } = d;
 
     for (const [idx, r] of Object.entries(results||{})) {
       const convId = r.conv_id || (convLookup||{})[idx]?.conversationId;
@@ -1090,7 +1121,30 @@ async function pollStatus() {
       }
     }
 
+    // Multi-turn rows: render the live conversation transcript
+    for (const [idx, ts] of Object.entries(turnState||{})) {
+      const el = document.getElementById(`draft-${idx}`);
+      if (!el || !ts) continue;
+      const parts = (ts.transcript||[]).map(m => m.role === 'autopilot'
+        ? `<div class="ap-draft" title="${esc(m.text)}"><span class="ap-author">${esc(m.author ? `Autopilot · ${m.author}` : 'Autopilot')}</span>${esc(m.text)}</div>`
+        : `<div class="cu-msg" title="${esc(m.text)}"><span class="cu-author">Customer${m.simulated ? ' · simulated' : ''}</span>${esc(m.text)}</div>`);
+      let statusHtml = '';
+      if (ts.phase === 'error') {
+        statusHtml = `<span class="badge b-fail" title="${esc(ts.error||'')}">✗ ${esc(ts.error||'Simulation error')}</span>`;
+      } else if (ts.phase !== 'done') {
+        const lbl = ts.phase === 'simulating' ? 'Simulating customer reply…'
+                  : ts.phase === 'evaluating' ? 'Evaluating conversation…'
+                  : 'Waiting for Autopilot…';
+        statusHtml = `<span style="color:var(--text-3)"><span class="spinner"></span> Turn ${Math.min(ts.turnIndex+1, ts.totalTurns)}/${ts.totalTurns} · ${lbl}</span>`;
+      }
+      el.innerHTML = `<span class="turn-badge">Multi-turn · ${ts.totalTurns} turns</span>` +
+        parts.join('') + (statusHtml ? `<div style="margin-top:4px">${statusHtml}</div>` : '');
+      const apTexts = (ts.transcript||[]).filter(m => m.role === 'autopilot').map(m => m.text).join('\n\n---\n\n');
+      if (apTexts) { if (_rowResults[idx]) _rowResults[idx].draft = apTexts; else _rowResults[idx] = { draft: apTexts }; }
+    }
+
     for (const [idx, dr] of Object.entries(drafts||{})) {
+      if ((turnState||{})[idx]) continue; // multi-turn rows are rendered from the transcript above
       const el = document.getElementById(`draft-${idx}`);
       if (!el || !dr) continue;
       const body = (dr.body || '').trim();
@@ -1111,7 +1165,7 @@ async function pollStatus() {
       } else if (sc.status === 'done') {
         const cls = sc.score >= 4 ? 'score-good' : sc.score >= 2.5 ? 'score-mid' : 'score-bad';
         el.innerHTML =
-          `<div class="score-card"><span class="score-num ${cls}">Overall ${sc.score} / 5</span>` +
+          `<div class="score-card"><span class="score-num ${cls}">${sc.multiTurn ? 'Conversation ' : 'Overall '}${sc.score} / 5</span>` +
           `<span class="score-cats">Tone ${sc.tone}/5 · Content ${sc.content}/5 · Formatting ${sc.formatting}/5</span>\n${esc(sc.explanation||'')}</div>`;
         if (_rowResults[idx]) _rowResults[idx].score = sc.score; else _rowResults[idx] = { score: sc.score };
       }
@@ -1196,7 +1250,8 @@ async function pollStatus() {
       const convCount    = Object.keys(convLookup||{}).length;
       const wh           = whVals.length;
       const elapsed      = _importStart ? Date.now() - _importStart : Infinity;
-      if (elapsed > 300_000) {
+      const pollCap      = Object.keys(_turns).length ? 1_200_000 : 300_000; // multi-turn back-and-forth takes longer
+      if (elapsed > pollCap) {
         clearInterval(_pollTimer); _pollTimer = null;
       } else if (convCount >= successCount && wh >= successCount && !_slowPoll) {
         _slowPoll = true;

@@ -1,0 +1,147 @@
+subject,from,to,body,outbound,outbound autopilot,body 2,outbound 2,outbound autopilot 2
+Order status,support-logistics@testforfront.com,jake.greenbergbell@testforfront.com,"Hi,
+
+I'd like to check on the status of a recent order I placed. Could you let me know where it currently stands?
+
+Thank you,
+Jake","Good morning Jake,
+
+I'd be happy to look into that for you. So I can pull up the most current status, could you share the order ID? It usually starts with ""ORD-"" and can be found in your confirmation email.
+
+From,
+Logistics Support",,"Hi,
+
+Of course - the order ID is ORD-12345.
+
+Thanks,
+Jake","Good morning Jake,
+
+Thanks for that. Here's the latest on order ORD-12345:
+
+- Status: Processing
+- Carrier: DHL
+- Estimated delivery: Jul 28
+- Items: 2
+- Order total: $418.99
+- Destination: New York, US
+
+Your order is being prepared and hasn't shipped just yet. As soon as it does, you'll receive a DHL tracking number by email. Is there anything else I can help with?
+
+From,
+Logistics Support",
+Where is my order?,support-logistics@testforfront.com,jake.greenbergbell@testforfront.com,"Hello,
+
+Can you tell me the current status of my order? I'm hoping it arrives soon.
+
+Best,
+Jake","Good morning Jake,
+
+I'd be happy to look into that for you. So I can pull up the most current status, could you share the order ID? It usually starts with ""ORD-"" and can be found in your confirmation email.
+
+From,
+Logistics Support",,"Hi,
+
+Sure, it's ORD-99999.
+
+Best,
+Jake","Good afternoon Jake,
+
+Great news - here's where order ORD-99999 stands:
+
+- Status: Out for delivery
+- Carrier: DHL
+- Estimated delivery: Jul 26
+- Items: 8
+- Order total: $479.99
+- Destination: London, GB
+
+Your order is out for delivery and should arrive on Jul 26. You can follow the DHL tracking link in your shipping email for live updates. Anything else I can do for you?
+
+From,
+Logistics Support",
+Checking on an order,support-logistics@testforfront.com,jake.greenbergbell@testforfront.com,"Hi there,
+
+I wanted to check the status of an order and confirm whether it's still on its way.
+
+Thanks,
+Jake","Good morning Jake,
+
+I'd be happy to look into that for you. So I can pull up the most current status, could you share the order ID? It usually starts with ""ORD-"" and can be found in your confirmation email.
+
+From,
+Logistics Support",,"Hello,
+
+The order ID is ORD-10001.
+
+Thanks,
+Jake","Good morning Jake,
+
+Thanks for confirming. Here's what I'm seeing for order ORD-10001:
+
+- Status: Cancelled
+- Carrier: FedEx
+- Original estimated delivery: Jul 31
+- Items: 6
+- Order total: $49.99
+- Destination: New York, US
+
+This order was cancelled, so it won't be shipping. If a payment was taken, any refund is typically processed within 5-7 business days. If you'd like to place a new order or look into what happened, just let me know.
+
+From,
+Logistics Support",
+Order update request,support-logistics@testforfront.com,jake.greenbergbell@testforfront.com,"Hi,
+
+Could you give me an update on my order? I'd like to know if it has shipped yet.
+
+Regards,
+Jake","Good morning Jake,
+
+I'd be happy to look into that for you. So I can pull up the most current status, could you share the order ID? It usually starts with ""ORD-"" and can be found in your confirmation email.
+
+From,
+Logistics Support",,"Hi,
+
+Happy to - it's ORD-20002.
+
+Regards,
+Jake","Good afternoon Jake,
+
+Thanks. Here's the current status of order ORD-20002:
+
+- Status: Confirmed
+- Carrier: DHL
+- Estimated delivery: Jul 30
+- Items: 8
+- Order total: $177.99
+- Destination: Berlin, DE
+
+Your order is confirmed and being prepared for shipment with DHL, with an estimated delivery of Jul 30. You'll get a tracking number by email once it's on its way. Let me know if there's anything else I can help with.
+
+From,
+Logistics Support",
+Status of my order,support-logistics@testforfront.com,jake.greenbergbell@testforfront.com,"Hello,
+
+I'd like to check the status of an order I placed recently. Can you help?
+
+Thank you,
+Jake","Good morning Jake,
+
+I'd be happy to look into that for you. So I can pull up the most current status, could you share the order ID? It usually starts with ""ORD-"" and can be found in your confirmation email.
+
+From,
+Logistics Support",,"Hi,
+
+Yes, the order ID is ORD-30003.
+
+Thank you,
+Jake","Good morning Jake,
+
+Thanks for that. Here's what I have for order ORD-30003:
+
+- Status: Confirmed
+- Carrier: UPS
+
+Your order is confirmed and will ship via UPS. A delivery date and tracking number haven't been assigned yet - you'll receive the tracking details by email as soon as it ships. If you'd like, I can follow up once it's on the move. Anything else I can help with?
+
+From,
+Logistics Support",
