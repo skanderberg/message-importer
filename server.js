@@ -63,6 +63,8 @@ function stripHtml(html) {
 // Autopilot may create the draft moments after the comment fires, so retry a few times.
 async function fetchDrafts(convId, rowIndex, token) {
   if (!token) return;
+  // Multi-turn rows: Autopilot sends real replies (no drafts), so watch sent messages instead
+  if (_job.turnState[rowIndex]) return fetchOutboundReply(convId, rowIndex, token);
   const jobRef = _job; // guard: drop results if the job is reset/replaced mid-flight
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await sleep(3000);
@@ -79,36 +81,56 @@ async function fetchDrafts(convId, rowIndex, token) {
         ? [latest.author.first_name, latest.author.last_name].filter(Boolean).join(' ') || latest.author.username || null
         : null;
       const draftBody = latest.text || stripHtml(latest.body) || latest.blurb || '';
-      const st = _job.turnState[rowIndex];
-
-      if (st) {
-        // Multi-turn: only advance when we're actually waiting on Autopilot for this turn,
-        // and only on a draft newer than the last one we processed. Late revisions of an
-        // already-consumed draft arriving while simulating/evaluating are ignored.
-        if (st.busy || st.phase !== 'waiting') return;
-        const lastMsg = st.transcript[st.transcript.length - 1];
-        if (lastMsg && lastMsg.role !== 'customer') return; // not expecting an Autopilot reply right now
-        const lastAp = [...st.transcript].reverse().find(m => m.role === 'autopilot');
-        const isNew = (latest.created_at || 0) > (st.lastDraftAt || 0) ||
-                      (!latest.created_at && (!lastAp || lastAp.text !== draftBody));
-        if (!isNew) continue; // keep retrying — Autopilot may not have drafted the new turn yet
-        st.busy = true;
-        st.lastDraftAt = latest.created_at || (st.lastDraftAt || 0) + 1;
-        st.transcript.push({ role: 'autopilot', text: draftBody, author, at: latest.created_at || null });
-        _job.drafts[rowIndex] = { body: draftBody, author, count: drafts.length, at: latest.created_at || null };
-        try {
-          await advanceConversation(rowIndex, convId, token);
-        } finally {
-          if (jobRef === _job && _job.turnState[rowIndex]) _job.turnState[rowIndex].busy = false;
-        }
-        return;
-      }
-
       _job.drafts[rowIndex] = { body: draftBody, author, count: drafts.length, at: latest.created_at || null };
       scoreDraft(rowIndex); // fire-and-forget quality scoring vs. human draft
       return;
     } catch (e) {
       console.log(`[drafts] attempt=${attempt} conv=${convId} error:`, e.message);
+    }
+  }
+}
+
+// Multi-turn: Autopilot replies are actually SENT (not drafted), so we look at the
+// conversation's outbound messages. Only advance when we're waiting on Autopilot for
+// this turn and the message is newer than the last one we consumed.
+async function fetchOutboundReply(convId, rowIndex, token) {
+  if (!token) return;
+  const jobRef = _job;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await sleep(3000);
+    if (jobRef !== _job) return;
+    const st = _job.turnState[rowIndex];
+    if (!st || st.busy || st.phase !== 'waiting') return;
+    const lastMsg = st.transcript[st.transcript.length - 1];
+    if (lastMsg && lastMsg.role !== 'customer') return; // not expecting an Autopilot reply right now
+    try {
+      const r = await frontGet(`/conversations/${convId}/messages`, token);
+      if (jobRef !== _job) return;
+      console.log(`[outbound] attempt=${attempt} conv=${convId} status=${r.status} count=${(r.data?._results||[]).length}`);
+      if (!r.ok) continue;
+      const outbound = (r.data?._results || []).filter(m => m.is_inbound === false);
+      if (!outbound.length) continue; // Autopilot hasn't replied yet
+      const latest = outbound.reduce((a, b) => ((b.created_at || 0) > (a.created_at || 0) ? b : a));
+      const text = latest.text || stripHtml(latest.body) || latest.blurb || '';
+      const lastAp = [...st.transcript].reverse().find(m => m.role === 'autopilot');
+      const isNew = (latest.created_at || 0) > (st.lastDraftAt || 0) ||
+                    (!latest.created_at && (!lastAp || lastAp.text !== text));
+      if (!isNew || !text) continue; // keep retrying — the new reply may not be visible yet
+      const author = latest.author
+        ? [latest.author.first_name, latest.author.last_name].filter(Boolean).join(' ') || latest.author.username || null
+        : null;
+      st.busy = true;
+      st.lastDraftAt = latest.created_at || (st.lastDraftAt || 0) + 1;
+      st.transcript.push({ role: 'autopilot', text, author, at: latest.created_at || null, sent: true });
+      _job.drafts[rowIndex] = { body: text, author, count: outbound.length, at: latest.created_at || null };
+      try {
+        await advanceConversation(rowIndex, convId, token);
+      } finally {
+        if (jobRef === _job && _job.turnState[rowIndex]) _job.turnState[rowIndex].busy = false;
+      }
+      return;
+    } catch (e) {
+      console.log(`[outbound] attempt=${attempt} conv=${convId} error:`, e.message);
     }
   }
 }
@@ -649,7 +671,12 @@ app.post('/webhook', (req, res) => {
     // Otherwise treat it as the inbox-add event and record which inbox it landed in
     const inboxName = body?.target?.data?.[0]?.name || null;
     _job.debugWebhook = { eventType, convId, inboxName, rawSnippet: rawBody.slice(0, 500) };
-    if (!inboxName) return;
+    if (!inboxName) {
+      // No inbox payload → likely a message-sent event (Autopilot replied).
+      // Route it to the draft/outbound check; buffer if the conv isn't mapped yet.
+      if (!applyCommentWebhook(convId)) _pendingComments.push({ convId });
+      return;
+    }
 
     if (!applyWebhook(convId, inboxName)) {
       _pendingWebhooks.push({ convId, inboxName });
