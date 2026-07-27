@@ -76,6 +76,21 @@
     /* ── Shell ── */
     .shell { display: flex; flex: 1; overflow: hidden; }
 
+    /* Sidebar hide / peek */
+    .sb-toggle {
+      width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border-2);
+      background: var(--white); color: var(--text-2); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; flex-shrink: 0; padding: 0;
+    }
+    .sb-toggle:hover { background: var(--row-hover); }
+    .shell.sb-hidden .config-panel { display: none; }
+    .shell.sb-hidden.sb-peek .config-panel {
+      display: flex; position: fixed; left: 0; top: 44px; bottom: 0; z-index: 300;
+      box-shadow: 4px 0 18px rgba(0,0,0,.15);
+    }
+    #edgeZone { position: fixed; left: 0; top: 44px; bottom: 0; width: 8px; z-index: 290; display: none; }
+
     /* ── Left config panel ── */
     .config-panel {
       width: 268px; min-width: 268px;
@@ -412,6 +427,7 @@
 <!-- ── Top bar ── -->
 <div class="topbar">
   <div class="topbar-logo">F</div>
+  <button class="sb-toggle" id="sbToggle" onclick="toggleSidebar()" title="Hide setup panel">«</button>
   <div class="topbar-sep"></div>
   <span class="topbar-title">Message Importer</span>
   <span class="topbar-subtitle" style="margin-left:4px">/ Import tool</span>
@@ -420,10 +436,11 @@
   </div>
 </div>
 
-<div class="shell">
+<div class="shell" id="shell">
+<div id="edgeZone"></div>
 
   <!-- ── Config panel ── -->
-  <div class="config-panel">
+  <div class="config-panel" id="configPanel">
 
     <!-- Auth -->
     <div class="panel-section">
@@ -759,7 +776,7 @@ function setConnected(data) {
 
 function disconnect() {
   _token = ''; _selectedInbox = null; _allInboxes = [];
-  try { localStorage.removeItem('front_token'); } catch (_) {}
+  try { localStorage.removeItem('front_token'); localStorage.removeItem('front_inbox'); } catch (_) {}
   document.getElementById('connectedBadge').classList.add('hidden');
   document.getElementById('tokenFields').classList.remove('hidden');
   document.getElementById('inboxWrap').classList.add('hidden');
@@ -803,6 +820,12 @@ async function loadInboxes() {
     document.getElementById('inboxSearchWrap').classList.remove('hidden');
     document.getElementById('inboxSearch').value = '';
     renderInboxList('');
+    // Restore previously selected inbox (if it still exists)
+    try {
+      const saved = JSON.parse(localStorage.getItem('front_inbox') || 'null');
+      const live  = saved && _allInboxes.find(i => i.id === saved.id);
+      if (live) selectInbox(live.id, live.name);
+    } catch (_) {}
   } catch (e) {
     document.getElementById('inboxLoading').style.display = 'none';
     const el = document.getElementById('inboxError');
@@ -816,12 +839,14 @@ function filterInboxes() {
   document.getElementById('inboxSearchClear').classList.toggle('hidden', !q);
   document.getElementById('inboxSearchIcon').classList.toggle('hidden', !!q);
   _selectedInbox = null; // clear selection when user types a new search
+  try { localStorage.removeItem('front_inbox'); } catch (_) {}
   document.getElementById('inboxList').classList.remove('hidden');
   renderInboxList(q);
 }
 
 function clearInboxSearch() {
   _selectedInbox = null;
+  try { localStorage.removeItem('front_inbox'); } catch (_) {}
   document.getElementById('inboxSearch').value = '';
   document.getElementById('inboxSearchClear').classList.add('hidden');
   document.getElementById('inboxSearchIcon').classList.remove('hidden');
@@ -863,6 +888,7 @@ function highlightMatch(text, q) {
 
 function selectInbox(id, name) {
   _selectedInbox = { id, name };
+  try { localStorage.setItem('front_inbox', JSON.stringify({ id, name })); } catch (_) {}
   document.getElementById('inboxSearch').value = name;
   document.getElementById('inboxSearchClear').classList.remove('hidden');
   document.getElementById('inboxSearchIcon').classList.add('hidden');
@@ -900,6 +926,7 @@ function handleFile(file) {
 }
 
 function setDzLoaded(name) {
+  _fileName = name;
   document.getElementById('dropzone').classList.add('loaded');
   const lbl = document.getElementById('dzLabel');
   lbl.textContent = `📄 ${name}`;
@@ -928,8 +955,8 @@ async function loadGsheet() {
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    parseCSV(await res.text());
     setDzLoaded('Google Sheet');
+    parseCSV(await res.text());
     document.getElementById('gsUrl').value = '';
   } catch(e) { showAlerts([{t:'err', m:`Could not load sheet: ${e.message}. Make sure it's shared publicly.`}]); }
 }
@@ -944,7 +971,27 @@ function norm(rawRows) {
     return n;
   });
 }
-function ingest(raw, warns) { rows = norm(raw); processRows(warns); }
+function ingest(raw, warns) { rows = norm(raw); saveFileCache(); processRows(warns); }
+
+// ── Spreadsheet cache (so a reload doesn't lose the loaded file) ──
+let _fileName = '';
+function saveFileCache() {
+  try {
+    const json = JSON.stringify({ name: _fileName || 'Cached file', rows });
+    if (json.length < 4_000_000) localStorage.setItem('front_file', json);
+  } catch (_) {}
+}
+function restoreFileCache() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('front_file') || 'null');
+    if (saved && Array.isArray(saved.rows) && saved.rows.length) {
+      _fileName = saved.name;
+      rows = saved.rows;
+      setDzLoaded(saved.name);
+      processRows();
+    }
+  } catch (_) {}
+}
 
 function processRows(parseWarns = []) {
   const fm = fromMode(), tm = toMode();
@@ -1462,6 +1509,8 @@ function downloadCSV() {
 function clearFile() {
   if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   rows = []; readyPayloads = []; _rowResults = {};
+  _fileName = '';
+  try { localStorage.removeItem('front_file'); } catch (_) {}
   const dz = document.getElementById('dropzone');
   dz.classList.remove('loaded','over');
   document.getElementById('dzLabel').textContent = 'Drop a file here, or click to browse';
@@ -1475,7 +1524,7 @@ function clearFile() {
 
 function resetAll() {
   clearFile();
-  _selectedInbox = null;
+  // Keep the selected inbox — it stays valid (and persisted) across resets.
   post('/api/reset', {}).catch(()=>{});
   document.getElementById('redoBtn').style.display = 'none';
   window.scrollTo({top:0});
@@ -1500,16 +1549,41 @@ document.getElementById('inboxList').addEventListener('click', e => {
   if (item) selectInbox(item.dataset.id, item.dataset.name);
 });
 
+// ── Sidebar hide / show ──
+function setSidebarHidden(hidden) {
+  const shell = document.getElementById('shell');
+  shell.classList.toggle('sb-hidden', hidden);
+  shell.classList.remove('sb-peek');
+  document.getElementById('edgeZone').style.display = hidden ? 'block' : 'none';
+  const btn = document.getElementById('sbToggle');
+  btn.textContent = hidden ? '☰' : '«';
+  btn.title = hidden ? 'Show setup panel' : 'Hide setup panel';
+  try { localStorage.setItem('sidebar_hidden', hidden ? '1' : '0'); } catch (_) {}
+}
+function toggleSidebar() {
+  setSidebarHidden(!document.getElementById('shell').classList.contains('sb-hidden'));
+}
+// Hovering the far-left edge peeks the hidden sidebar; leaving the panel hides it again
+document.getElementById('edgeZone').addEventListener('mouseenter', () => {
+  document.getElementById('shell').classList.add('sb-peek');
+});
+document.getElementById('configPanel').addEventListener('mouseleave', () => {
+  const shell = document.getElementById('shell');
+  if (shell.classList.contains('sb-hidden')) shell.classList.remove('sb-peek');
+});
+
 // Init
 onModeChange();
 
-// Auto-reconnect with the saved token (stored in this browser after a successful connect)
+// Restore saved state: sidebar visibility, token (auto-reconnect), and last loaded file
 try {
+  if (localStorage.getItem('sidebar_hidden') === '1') setSidebarHidden(true);
   const savedToken = localStorage.getItem('front_token');
   if (savedToken) {
     document.getElementById('apiToken').value = savedToken;
     validateCreds();
   }
+  restoreFileCache();
 } catch (_) {}
 </script>
 </body>
