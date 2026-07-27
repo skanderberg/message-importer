@@ -523,6 +523,9 @@
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin:7px 0 3px">Optional columns</div>
           <code style="font-size:11.5px;color:var(--text-3)">from &nbsp; to &nbsp; inbox &nbsp; expected_inbox &nbsp; outbound</code>
           <div style="margin-top:5px;font-size:10.5px;color:var(--text-3);line-height:1.5"><code>outbound</code> = the human reply, used to score Autopilot drafts with AI</div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);margin:7px 0 3px">Multi-turn columns</div>
+          <code style="font-size:11.5px;color:var(--text-3)">body 2 &nbsp; outbound 2 &nbsp; body 3 &nbsp; outbound 3 &nbsp; …</code>
+          <div style="margin-top:5px;font-size:10.5px;color:var(--text-3);line-height:1.5">Rows with <code>body 2</code>, <code>body 3</code>, … are simulated as a full back-and-forth: each customer message is sent in turn, Autopilot's sent replies are captured, and the whole conversation is graded against the example</div>
         </div>
         <div style="margin-top:8px;font-size:11.5px;color:var(--text-3);line-height:1.55">
           Rate limit: <strong style="color:var(--text-2)">50 msgs / min</strong>. Larger imports pause automatically between batches.
@@ -1021,7 +1024,10 @@ function renderList(statuses, fm, tm) {
             ? `<div class="hu-draft" title="${outboundTxt}"><span class="hu-author">Human reply</span>${outboundTxt}</div>`
             : '<span style="color:var(--text-3)">—</span>')}</div>
       <div class="row-autopilot" id="draft-${i}">${_turns[i]
-        ? `<span class="turn-badge">Multi-turn · ${_turns[i].length} turns</span><br><span style="color:var(--text-3)">—</span>`
+        ? `<span class="turn-badge">Multi-turn · ${_turns[i].length} turns</span>` +
+          _turns[i].map((t, k) => t.inbound
+            ? `<div class="cu-msg" title="${esc(t.inbound)}"><span class="cu-author">Customer message ${k+1} of ${_turns[i].length} · scripted</span>${esc(t.inbound)}</div>`
+            : '').join('')
         : '<span style="color:var(--text-3)">—</span>'}</div>
       <div class="row-score" id="score-${i}"><span style="color:var(--text-3)">—</span></div>
     </div>`;

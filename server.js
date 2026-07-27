@@ -206,6 +206,12 @@ async function advanceConversation(rowIndex, convId, token) {
   if (jobRef !== _job) return;
   if (!customerMsg) customerMsg = nextTurn.inbound; // fall back to the scripted message verbatim
 
+  // Pause before replying so the exchange paces like a real customer
+  await sleep(5000);
+  if (jobRef !== _job) return;
+  const stNow = _job.turnState[rowIndex];
+  if (!stNow || stNow.phase !== 'simulating') return;
+
   // Import the simulated customer reply into the same conversation (same thread_ref)
   const ctx = _job.rowContext[rowIndex] || {};
   const now = Math.floor(Date.now() / 1000);
