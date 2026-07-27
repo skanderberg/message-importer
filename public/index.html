@@ -716,7 +716,7 @@ let rows = [], readyPayloads = [], _rowResults = {}, _pollTimer = null, _importS
 let _expectedInboxes = {}; // rowIndex → inbox name from file
 let _humanDrafts = {};     // rowIndex → human reply from 'outbound' column
 let _turns = {};           // rowIndex → [{inbound, human}] for multi-turn rows (2+ turns)
-let _viewMode = 'table';   // 'table' | 'inbox'
+let _viewMode = 'inbox';   // 'table' | 'inbox' — defaults to Inbox view
 let _selConv = null;       // selected row index in inbox view
 let _lastPoll = {};        // latest /api/import-status payload (drives inbox view)
 
@@ -1066,7 +1066,7 @@ function processRows(parseWarns = []) {
 
   renderList(statuses, fm, tm);
   document.getElementById('viewToggle').style.display = '';
-  if (_viewMode === 'inbox') renderInbox();
+  setViewMode(_viewMode); // re-apply current view (inbox by default)
   if (readyPayloads.length) showImportBar(); else hideImportBar();
 }
 
@@ -1261,7 +1261,9 @@ function hideList() {
   document.getElementById('previewMeta').textContent = '';
   document.getElementById('viewToggle').style.display = 'none';
   _selConv = null;
-  if (_viewMode === 'inbox') setViewMode('table');
+  // Reset panes without changing the preferred view mode (re-applied when a file loads)
+  document.getElementById('inboxView').classList.add('hidden');
+  document.getElementById('msgList').classList.remove('hidden');
 }
 
 function showImportBar() {
